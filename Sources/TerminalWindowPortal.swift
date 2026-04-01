@@ -1026,6 +1026,7 @@ final class WindowTerminalPortal: NSObject {
         entry.visibleInUI = visibleInUI
         if !visibleInUI {
             entry.transientRecoveryRetriesRemaining = 0
+            entry.hostedView?.isHidden = true
         }
         entriesByHostedId[hostedId] = entry
     }

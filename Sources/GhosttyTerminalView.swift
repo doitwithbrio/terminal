@@ -28,6 +28,7 @@ private func cmuxTransparentWindowBaseColor() -> NSColor {
     // avoids visual artifacts that can happen with a fully clear window background.
     NSColor.white.withAlphaComponent(0.001)
 }
+
 #endif
 
 #if DEBUG
@@ -903,7 +904,7 @@ class GhosttyApp {
     /// pending tick on the main queue at any time.
     private var _tickScheduled = false
     private let _tickLock = NSLock()
-    private(set) var defaultBackgroundColor: NSColor = .windowBackgroundColor
+    private(set) var defaultBackgroundColor: NSColor = NSColor(hex: DesignSystem.Terminal.backgroundHex) ?? .white
     private(set) var defaultBackgroundOpacity: Double = 1.0
     private static func resolveBackgroundLogURL(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -1308,6 +1309,12 @@ class GhosttyApp {
                 prefix: "cmux-layer-bg",
                 logLabel: "layer background (fallback)"
             )
+            loadInlineGhosttyConfig(
+                DesignSystem.Terminal.inlineConfig,
+                into: fallbackConfig,
+                prefix: "cmux-ernest-terminal-fallback",
+                logLabel: "Ernest terminal fallback"
+            )
             ghostty_config_finalize(fallbackConfig)
             updateDefaultBackground(from: fallbackConfig, source: "initialize.fallbackConfig")
 
@@ -1393,6 +1400,12 @@ class GhosttyApp {
             into: config,
             prefix: "cmux-layer-bg",
             logLabel: "layer background"
+        )
+        loadInlineGhosttyConfig(
+            DesignSystem.Terminal.inlineConfig,
+            into: config,
+            prefix: "cmux-ernest-terminal-default",
+            logLabel: "Ernest terminal default"
         )
         ghostty_config_finalize(config)
     }
@@ -4974,6 +4987,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         }
         layer?.contentsScale = layerScale
         layer?.masksToBounds = true
+        layer?.cornerRadius = DesignSystem.Terminal.cornerRadius
         if let metalLayer = layer as? CAMetalLayer {
             if drawablePixelSize != lastDrawableSize || metalLayer.drawableSize != drawablePixelSize {
                 if metalLayer.drawableSize != drawablePixelSize {
@@ -7358,6 +7372,16 @@ final class GhosttySurfaceScrollView: NSView {
         return String(describing: contents)
     }
 
+    private func applyTerminalCornerRadius() {
+        let radius = DesignSystem.Terminal.cornerRadius
+        layer?.cornerRadius = radius
+        layer?.masksToBounds = true
+        backgroundView.layer?.cornerRadius = radius
+        backgroundView.layer?.masksToBounds = true
+        inactiveOverlayView.layer?.cornerRadius = radius
+        inactiveOverlayView.layer?.masksToBounds = true
+    }
+
     private static func updatePresentStats(surfaceId: UUID, layer: CALayer?) -> (count: Int, last: CFTimeInterval, key: String) {
         let key = contentsKey(for: layer)
         if lastContentsKeys[surfaceId] != key {
@@ -7475,6 +7499,7 @@ final class GhosttySurfaceScrollView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.masksToBounds = true
+        layer?.cornerRadius = DesignSystem.Terminal.cornerRadius
 
         backgroundView.wantsLayer = true
         let initialTerminalBackground = GhosttyApp.shared.defaultBackgroundColor
@@ -7650,6 +7675,8 @@ final class GhosttySurfaceScrollView: NSView {
             imageTransferIndicatorContainerView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
         ])
 
+        applyTerminalCornerRadius()
+
         scrollView.contentView.postsBoundsChangedNotifications = true
         observers.append(NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
@@ -7762,6 +7789,7 @@ final class GhosttySurfaceScrollView: NSView {
 
     override func layout() {
         super.layout()
+        applyTerminalCornerRadius()
         synchronizeGeometryAndContent()
     }
 

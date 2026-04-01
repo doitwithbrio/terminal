@@ -121,6 +121,7 @@ final class TitlebarControlsViewModel: ObservableObject {
 
 extension Notification.Name {
     static let cmuxNotificationsPopoverVisibilityDidChange = Notification.Name("cmux.notificationsPopoverVisibilityDidChange")
+    static let cmuxSidebarVisibilityDidChange = Notification.Name("cmux.sidebarVisibilityDidChange")
 }
 
 private enum NotificationsPopoverVisibilityUserInfoKey {
@@ -547,31 +548,6 @@ struct TitlebarControlsView: View {
     }
 }
 
-struct HiddenTitlebarSidebarControlsView: View {
-    @ObservedObject var notificationStore: TerminalNotificationStore
-    @StateObject private var viewModel = TitlebarControlsViewModel()
-
-    private let hostWidth: CGFloat = 124
-    private let hostHeight: CGFloat = 28
-
-    var body: some View {
-        TitlebarControlsView(
-            notificationStore: notificationStore,
-            viewModel: viewModel,
-            onToggleSidebar: { _ = AppDelegate.shared?.sidebarState?.toggle() },
-            onToggleNotifications: { [viewModel] in
-                AppDelegate.shared?.toggleNotificationsPopover(
-                    animated: true,
-                    anchorView: viewModel.notificationsAnchorView
-                )
-            },
-            onNewTab: { _ = AppDelegate.shared?.tabManager?.addTab() },
-            visibilityMode: .onHover
-        )
-        .frame(width: hostWidth, height: hostHeight, alignment: .leading)
-    }
-}
-
 enum TitlebarControlsVisibilityMode {
     case alwaysVisible
     case onHover
@@ -782,8 +758,11 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
     private var lastAppliedLayoutSnapshot: TitlebarControlsLayoutSnapshot?
     private let viewModel = TitlebarControlsViewModel()
     private var userDefaultsObserver: NSObjectProtocol?
+    private var sidebarVisibilityObserver: NSObjectProtocol?
     var popoverIsShownForTesting: Bool { notificationsPopover.isShown }
     private var showsWorkspaceTitlebar: Bool { !WorkspacePresentationModeSettings.isMinimal() }
+    private var sidebarIsVisible: Bool { AppDelegate.shared?.sidebarState?.showsSidebarColumn ?? false }
+    private var shouldShowAccessory: Bool { showsWorkspaceTitlebar && !sidebarIsVisible }
 
     init(notificationStore: TerminalNotificationStore) {
         self.notificationStore = notificationStore
@@ -826,6 +805,17 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
             }
         }
 
+        sidebarVisibilityObserver = NotificationCenter.default.addObserver(
+            forName: .cmuxSidebarVisibilityDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyWorkspaceTitlebarVisibility()
+            if self?.showsWorkspaceTitlebar == true, self?.sidebarIsVisible == false {
+                self?.restoreSizeAfterMinimalMode()
+            }
+        }
+
         applyWorkspaceTitlebarVisibility()
         scheduleSizeUpdate(invalidateFittingSize: true)
     }
@@ -837,6 +827,9 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
     deinit {
         if let userDefaultsObserver {
             NotificationCenter.default.removeObserver(userDefaultsObserver)
+        }
+        if let sidebarVisibilityObserver {
+            NotificationCenter.default.removeObserver(sidebarVisibilityObserver)
         }
     }
 
@@ -872,7 +865,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
 
     private func updateSize() {
         applyWorkspaceTitlebarVisibility()
-        guard showsWorkspaceTitlebar else { return }
+        guard shouldShowAccessory else { return }
         let contentSize: NSSize
         if fittingSizeNeedsRefresh || cachedFittingSize == nil {
             hostingView.invalidateIntrinsicContentSize()
@@ -919,7 +912,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
     }
 
     private func applyWorkspaceTitlebarVisibility() {
-        let shouldShow = showsWorkspaceTitlebar
+        let shouldShow = shouldShowAccessory
         self.isHidden = !shouldShow
         view.isHidden = !shouldShow
         view.alphaValue = shouldShow ? 1 : 0

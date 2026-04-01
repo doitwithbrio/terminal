@@ -5729,7 +5729,10 @@ final class Workspace: Identifiable, ObservableObject {
     nonisolated static func resolvedChromeColors(
         from backgroundColor: NSColor
     ) -> BonsplitConfiguration.Appearance.ChromeColors {
-        .init(backgroundHex: backgroundColor.hexString())
+        .init(
+            backgroundHex: DesignSystem.Color.panelSurface.hexString(),
+            borderHex: DesignSystem.Color.panelBorder.hexString()
+        )
     }
 
     private static func bonsplitAppearance(
@@ -5737,13 +5740,16 @@ final class Workspace: Identifiable, ObservableObject {
         backgroundOpacity: Double
     ) -> BonsplitConfiguration.Appearance {
         BonsplitConfiguration.Appearance(
+            paneGap: DesignSystem.Metrics.panelGap,
+            paneCornerRadius: DesignSystem.Primitive.Radius.panel,
+            topShelfInsetTop: DesignSystem.Metrics.sidebarInset,
+            topShelfInsetLeading: DesignSystem.Metrics.sidebarInset,
+            topShelfInsetTrailing: DesignSystem.Metrics.sidebarInset,
             splitButtonTooltips: Self.currentSplitButtonTooltips(),
             enableAnimations: false,
             chromeColors: .init(
-                backgroundHex: Self.bonsplitChromeHex(
-                    backgroundColor: backgroundColor,
-                    backgroundOpacity: backgroundOpacity
-                )
+                backgroundHex: DesignSystem.Color.panelSurface.hexString(),
+                borderHex: DesignSystem.Color.panelBorder.hexString()
             )
         )
     }
@@ -5757,10 +5763,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func applyGhosttyChrome(backgroundColor: NSColor, backgroundOpacity: Double, reason: String = "unspecified") {
-        let nextHex = Self.bonsplitChromeHex(
-            backgroundColor: backgroundColor,
-            backgroundOpacity: backgroundOpacity
-        )
+        let nextHex = DesignSystem.Color.panelSurface.hexString()
         let currentChromeColors = bonsplitController.configuration.appearance.chromeColors
         let isNoOp = currentChromeColors.backgroundHex == nextHex
 
@@ -5775,6 +5778,7 @@ final class Workspace: Identifiable, ObservableObject {
             return
         }
         bonsplitController.configuration.appearance.chromeColors.backgroundHex = nextHex
+        bonsplitController.configuration.appearance.chromeColors.borderHex = DesignSystem.Color.panelBorder.hexString()
         if GhosttyApp.shared.backgroundLogEnabled {
             GhosttyApp.shared.logBackground(
                 "theme applied workspace=\(id.uuidString) reason=\(reason) resultingBg=\(bonsplitController.configuration.appearance.chromeColors.backgroundHex ?? "nil")"
@@ -9492,6 +9496,9 @@ final class Workspace: Identifiable, ObservableObject {
                 terminalPanel.hostedView.setActive(shouldBeActive)
                 didChange = true
             }
+            if !shouldBeVisible {
+                TerminalWindowPortalRegistry.hideHostedView(terminalPanel.hostedView)
+            }
             TerminalWindowPortalRegistry.updateEntryVisibility(
                 for: terminalPanel.hostedView,
                 visibleInUI: shouldBeVisible
@@ -9964,6 +9971,17 @@ extension Workspace: BonsplitDelegate {
         }
     }
 
+    /// Hide terminal portals for tabs that are no longer selected in the given pane.
+    private func hideTerminalPortalsForDeselectedTabs(inPane pane: PaneID, selectedTabId: TabID) {
+        for tab in bonsplitController.tabs(inPane: pane) {
+            guard tab.id != selectedTabId else { continue }
+            guard let panelId = panelIdFromSurfaceId(tab.id),
+                  let terminalPanel = panels[panelId] as? TerminalPanel else { continue }
+            terminalPanel.hostedView.setVisibleInUI(false)
+            TerminalWindowPortalRegistry.hideHostedView(terminalPanel.hostedView)
+        }
+    }
+
     /// Hide browser portals for tabs that are no longer selected in the given pane.
     private func hideBrowserPortalsForDeselectedTabs(inPane pane: PaneID, selectedTabId: TabID) {
         for tab in bonsplitController.tabs(inPane: pane) {
@@ -10053,11 +10071,12 @@ extension Workspace: BonsplitDelegate {
             p.unfocus()
         }
 
-        // Explicitly hide browser portals for deselected tabs in this pane.
+        // Explicitly hide portal-hosted views for deselected tabs in this pane.
         // Bonsplit's keepAllAlive mode hides non-selected tabs via SwiftUI .opacity(0),
-        // but portal-hosted WKWebViews render at the window level in AppKit and are not
-        // affected by SwiftUI opacity. Without an explicit hide, the deselected browser's
-        // portal layer can remain visible above the newly selected tab.
+        // but portal-hosted views render at the window level in AppKit and are not affected
+        // by SwiftUI opacity. Without an explicit hide, a deselected terminal/browser portal
+        // can remain visible above the newly selected tab.
+        hideTerminalPortalsForDeselectedTabs(inPane: focusedPane, selectedTabId: selectedTabId)
         hideBrowserPortalsForDeselectedTabs(inPane: focusedPane, selectedTabId: selectedTabId)
 
         if let focusWindow = activationWindow(for: panel) {
@@ -10856,6 +10875,11 @@ extension Workspace: BonsplitDelegate {
         default:
             _ = newTerminalSurface(inPane: pane)
         }
+    }
+
+    func splitTabBarDidRequestNotifications(_ controller: BonsplitController, inPane pane: PaneID) {
+        _ = pane
+        AppDelegate.shared?.toggleNotificationsPopover(animated: true)
     }
 
     func splitTabBar(_ controller: BonsplitController, didRequestTabContextAction action: TabContextAction, for tab: Bonsplit.Tab, inPane pane: PaneID) {

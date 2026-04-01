@@ -41,38 +41,19 @@ func sidebarActiveForegroundNSColor(
 }
 
 func cmuxAccentNSColor(for colorScheme: ColorScheme) -> NSColor {
-    switch colorScheme {
-    case .dark:
-        return NSColor(
-            srgbRed: 0,
-            green: 145.0 / 255.0,
-            blue: 1.0,
-            alpha: 1.0
-        )
-    default:
-        return NSColor(
-            srgbRed: 0,
-            green: 136.0 / 255.0,
-            blue: 1.0,
-            alpha: 1.0
-        )
-    }
+    DesignSystem.LegacyAccent.nsColor(for: colorScheme)
 }
 
 func cmuxAccentNSColor(for appAppearance: NSAppearance?) -> NSColor {
-    let bestMatch = appAppearance?.bestMatch(from: [.darkAqua, .aqua])
-    let scheme: ColorScheme = (bestMatch == .darkAqua) ? .dark : .light
-    return cmuxAccentNSColor(for: scheme)
+    DesignSystem.LegacyAccent.nsColor(for: appAppearance)
 }
 
 func cmuxAccentNSColor() -> NSColor {
-    NSColor(name: nil) { appearance in
-        cmuxAccentNSColor(for: appearance)
-    }
+    DesignSystem.LegacyAccent.dynamicNSColor()
 }
 
 func cmuxAccentColor() -> Color {
-    Color(nsColor: cmuxAccentNSColor())
+    DesignSystem.LegacyAccent.color()
 }
 
 struct SidebarRemoteErrorCopyEntry: Equatable {
@@ -327,6 +308,10 @@ struct TitlebarLayerBackground: NSViewRepresentable {
 final class SidebarState: ObservableObject {
     @Published var isVisible: Bool
     @Published var persistedWidth: CGFloat
+
+    var showsSidebarColumn: Bool {
+        true
+    }
 
     init(isVisible: Bool = true, persistedWidth: CGFloat = CGFloat(SessionPersistencePolicy.defaultSidebarWidth)) {
         self.isVisible = isVisible
@@ -2116,8 +2101,9 @@ struct ContentView: View {
 
     private func dividerBandContains(pointInContent point: NSPoint, contentBounds: NSRect) -> Bool {
         guard point.y >= contentBounds.minY, point.y <= contentBounds.maxY else { return false }
-        let minX = sidebarWidth - sidebarResizerSidebarHitWidth
-        let maxX = sidebarWidth + sidebarResizerContentHitWidth
+        let dividerX = shellPadding + sidebarWidth + (shellSidebarSpacing / 2)
+        let minX = dividerX - sidebarResizerSidebarHitWidth
+        let maxX = dividerX + sidebarResizerContentHitWidth
         return point.x >= minX && point.x <= maxX
     }
 
@@ -2296,7 +2282,7 @@ struct ContentView: View {
     private var sidebarResizerOverlay: some View {
         GeometryReader { proxy in
             let totalWidth = max(0, proxy.size.width)
-            let dividerX = min(max(sidebarWidth, 0), totalWidth)
+            let dividerX = min(max(sidebarWidth + (shellSidebarSpacing / 2), 0), totalWidth)
             let leadingWidth = max(0, dividerX - sidebarResizerSidebarHitWidth)
 
             HStack(spacing: 0) {
@@ -2329,12 +2315,45 @@ struct ContentView: View {
         VerticalTabsSidebar(
             updateViewModel: updateViewModel,
             onSendFeedback: presentFeedbackComposer,
+            onToggleSidebar: { AppDelegate.shared?.sidebarState?.toggle() },
+            isCollapsed: !sidebarState.isVisible,
             selection: $sidebarSelectionState.selection,
             selectedTabIds: $selectedTabIds,
             lastSidebarSelectionIndex: $lastSidebarSelectionIndex
         )
-        .frame(width: sidebarWidth)
+        .padding(1)
+        .designPanel()
+        .frame(width: sidebarState.isVisible ? sidebarWidth : DesignSystem.Metrics.sidebarRailWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var shellPadding: CGFloat {
+        isFullScreen ? 10 : DesignSystem.Metrics.outerPadding
+    }
+
+    private var shellSidebarSpacing: CGFloat {
+        sidebarState.showsSidebarColumn ? DesignSystem.Metrics.panelGap : 0
+    }
+
+    private var selectedWorkspaceUsesPeerPaneCards: Bool {
+        guard sidebarSelectionState.selection == .tabs,
+              let selectedId = tabManager.selectedTabId,
+              let workspace = tabManager.tabs.first(where: { $0.id == selectedId }) else {
+            return false
+        }
+        return workspace.bonsplitController.allPaneIds.count > 1
+    }
+
+    private var terminalPanelView: some View {
+        Group {
+            if selectedWorkspaceUsesPeerPaneCards {
+                terminalContentWithSidebarDropOverlay
+            } else {
+                terminalContentWithSidebarDropOverlay
+                    .padding(1)
+                    .designPanel()
+            }
+        }
     }
 
     /// Space at top of content area for the titlebar. This must be at least the actual titlebar
@@ -2352,6 +2371,10 @@ struct ContentView: View {
             return isFullScreen ? 0 : -titlebarPadding
         }
         return titlebarPadding
+    }
+
+    private var terminalTopInset: CGFloat {
+        (isFullScreen && !isMinimalMode) ? effectiveTitlebarPadding : 0
     }
 
     private var terminalContent: some View {
@@ -2411,10 +2434,9 @@ struct ContentView: View {
                 .allowsHitTesting(sidebarSelectionState.selection == .notifications)
                 .accessibilityHidden(sidebarSelectionState.selection != .notifications)
         }
-        .padding(.top, effectiveTitlebarPadding)
+        .padding(.top, terminalTopInset)
         .overlay(alignment: .top) {
-            if !isMinimalMode {
-                // Titlebar overlay is only over terminal content, not the sidebar.
+            if isFullScreen && !isMinimalMode {
                 customTitlebar
             }
         }
@@ -2438,13 +2460,6 @@ struct ContentView: View {
 
     @State private var titlebarLeadingInset: CGFloat = 12
     private var windowIdentifier: String { "cmux.main.\(windowId.uuidString)" }
-    private var fakeTitlebarTextColor: Color {
-        _ = titlebarThemeGeneration
-        let ghosttyBackground = GhosttyApp.shared.defaultBackgroundColor
-        return ghosttyBackground.isLightColor
-            ? Color.black.opacity(0.78)
-            : Color.white.opacity(0.82)
-    }
     private var fullscreenControls: some View {
         TitlebarControlsView(
             notificationStore: TerminalNotificationStore.shared,
@@ -2471,53 +2486,27 @@ struct ContentView: View {
                 .allowsHitTesting(false)
 
             HStack(spacing: 8) {
-                if isFullScreen && !sidebarState.isVisible {
+                if isFullScreen && !sidebarState.showsSidebarColumn {
                     fullscreenControls
                 }
-
-                // Draggable folder icon + focused command name
-                if let directory = focusedDirectory {
-                    DraggableFolderIcon(directory: directory)
-                        .padding(.leading, -6)
-                }
-
-                Text(titlebarText)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(fakeTitlebarTextColor)
-                    .lineLimit(1)
-                    .allowsHitTesting(false)
 
                 Spacer()
 
             }
             .frame(height: 28)
             .padding(.top, 2)
-            .padding(.leading, (isFullScreen && !sidebarState.isVisible) ? 8 : (sidebarState.isVisible ? 12 : titlebarLeadingInset + CGFloat(debugTitlebarLeadingExtra)))
+            .padding(.leading, (isFullScreen && !sidebarState.showsSidebarColumn) ? 8 : (sidebarState.showsSidebarColumn ? 12 : titlebarLeadingInset + CGFloat(debugTitlebarLeadingExtra)))
             .padding(.trailing, 8)
         }
         .frame(height: titlebarPadding)
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .background(TitlebarDoubleClickMonitorView())
-        .background({
-            // The terminal background is provided by a single CALayer
-            // (backgroundView in GhosttySurfaceScrollView), so the titlebar
-            // opacity matches the configured value directly.
-            let alpha = CGFloat(GhosttyApp.shared.defaultBackgroundOpacity)
-            return TitlebarLayerBackground(
-                backgroundColor: GhosttyApp.shared.defaultBackgroundColor,
-                opacity: alpha
-            )
-        }())
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(height: 1)
-        }
+        .background(Color.clear)
     }
 
     private func syncTrafficLightInset() {
-        let inset: CGFloat = (isMinimalMode && !sidebarState.isVisible && !isFullScreen) ? 80 : 0
+        let inset: CGFloat = (isMinimalMode && !sidebarState.showsSidebarColumn && !isFullScreen) ? 80 : 0
         for tab in tabManager.tabs {
             if tab.bonsplitController.configuration.appearance.tabBarLeadingInset != inset {
                 tab.bonsplitController.configuration.appearance.tabBarLeadingInset = inset
@@ -2586,52 +2575,16 @@ struct ContentView: View {
         )
     }
 
-    private var focusedDirectory: String? {
-        guard let selectedId = tabManager.selectedTabId,
-              let tab = tabManager.tabs.first(where: { $0.id == selectedId }) else {
-            return nil
-        }
-        // Use focused panel's directory if available
-        if let focusedPanelId = tab.focusedPanelId,
-           let panelDir = tab.panelDirectories[focusedPanelId] {
-            let trimmed = panelDir.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        let dir = tab.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        return dir.isEmpty ? nil : dir
-    }
-
     private var contentAndSidebarLayout: AnyView {
-        let layout: AnyView
-        // When matching terminal background, use HStack so both sidebar and terminal
-        // sit directly on the window background with no intermediate layers.
-        let useWithinWindow = sidebarBlendMode == SidebarBlendModeOption.withinWindow.rawValue
-            && !sidebarMatchTerminalBackground
-        if useWithinWindow {
-            // Overlay mode: terminal extends full width, sidebar on top
-            // This allows withinWindow blur to see the terminal content
-            layout = AnyView(
-                ZStack(alignment: .leading) {
-                    terminalContentWithSidebarDropOverlay
-                        .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
-                    if sidebarState.isVisible {
-                        sidebarView
-                    }
+        let layout = AnyView(
+            HStack(spacing: 0) {
+                if sidebarState.showsSidebarColumn {
+                    sidebarView
+                        .padding(.trailing, shellSidebarSpacing)
                 }
-            )
-        } else {
-            // Standard HStack mode for behindWindow blur
-            layout = AnyView(
-                HStack(spacing: 0) {
-                    if sidebarState.isVisible {
-                        sidebarView
-                    }
-                    terminalContentWithSidebarDropOverlay
-                }
-            )
-        }
+                terminalPanelView
+            }
+        )
 
         return AnyView(
             layout
@@ -2648,15 +2601,9 @@ struct ContentView: View {
         var view = AnyView(
             contentAndSidebarLayout
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .overlay(alignment: .topLeading) {
-                    if isFullScreen && sidebarState.isVisible && !isMinimalMode {
-                        fullscreenControls
-                            .padding(.leading, 10)
-                            .padding(.top, 4)
-                    }
-                }
+                .padding(shellPadding)
                 .frame(minWidth: CGFloat(SessionPersistencePolicy.minimumWindowWidth), minHeight: CGFloat(SessionPersistencePolicy.minimumWindowHeight))
-                .background(Color.clear)
+                .background(DesignSystem.Color.windowCanvas.dsColor.ignoresSafeArea())
         )
 
         view = AnyView(view.onAppear {
@@ -3100,6 +3047,11 @@ struct ContentView: View {
             }
             updateSidebarResizerBandState()
             syncTrafficLightInset()
+            NotificationCenter.default.post(
+                name: .cmuxSidebarVisibilityDidChange,
+                object: nil,
+                userInfo: ["isVisible": sidebarState.showsSidebarColumn]
+            )
         })
 
         view = AnyView(view.onChange(of: isMinimalMode) { _, _ in
@@ -8660,6 +8612,8 @@ private final class SidebarTabItemSettingsStore: ObservableObject {
 struct VerticalTabsSidebar: View {
     @ObservedObject var updateViewModel: UpdateViewModel
     let onSendFeedback: () -> Void
+    let onToggleSidebar: () -> Void
+    let isCollapsed: Bool
     @EnvironmentObject var tabManager: TabManager
     @EnvironmentObject var notificationStore: TerminalNotificationStore
     @Binding var selection: SidebarSelection
@@ -8671,19 +8625,10 @@ struct VerticalTabsSidebar: View {
     @StateObject private var tabItemSettingsStore = SidebarTabItemSettingsStore()
     @State private var draggedTabId: UUID?
     @State private var dropIndicator: SidebarDropIndicator?
-    @AppStorage(WorkspacePresentationModeSettings.modeKey)
-    private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
     @AppStorage(KeyboardShortcutSettings.Action.selectWorkspaceByNumber.defaultsKey)
     private var selectWorkspaceByNumberShortcutData = Data()
 
-    /// Space at top of sidebar for traffic light buttons
-    private let trafficLightPadding: CGFloat = 28
-    private let tabRowSpacing: CGFloat = 2
-    private let hiddenTitlebarControlsLeadingInset: CGFloat = 72
-
-    private var isMinimalMode: Bool {
-        WorkspacePresentationModeSettings.mode(for: workspacePresentationMode) == .minimal
-    }
+    private let tabRowSpacing = DesignSystem.Metrics.sidebarRowSpacing
 
     private var showsSidebarNotificationMessage: Bool {
         tabItemSettingsStore.snapshot.showsNotificationMessage
@@ -8694,6 +8639,152 @@ struct VerticalTabsSidebar: View {
             from: selectWorkspaceByNumberShortcutData,
             fallback: KeyboardShortcutSettings.Action.selectWorkspaceByNumber.defaultShortcut
         )
+    }
+
+    private var sidebarHeader: some View {
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: DesignSystem.Metrics.sidebarHeaderTopInset)
+                .background(
+                    WindowDragHandleView()
+                        .background(TitlebarDoubleClickMonitorView())
+                )
+
+            HStack(alignment: .top, spacing: 12) {
+                Text(String(localized: "sidebar.header.title", defaultValue: "terminal"))
+                    .font(DesignSystem.Typography.sidebarWordmark)
+                    .foregroundColor(DesignSystem.Color.sidebarWordmark.dsColor)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Button(action: onToggleSidebar) {
+                    Image(systemName: "sidebar.left")
+                        .font(DesignSystem.Typography.iconButton)
+                        .foregroundColor(DesignSystem.Color.textPrimary.dsColor.opacity(0.72))
+                        .frame(width: 28, height: 28)
+                        .background(
+                            RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.iconButton, style: .continuous)
+                                .fill(DesignSystem.Color.quietControlFill.dsColor)
+                        )
+                }
+                .buttonStyle(.plain)
+                .safeHelp(String(localized: "sidebar.collapse.tooltip", defaultValue: "Hide sidebar"))
+                .accessibilityLabel(String(localized: "sidebar.collapse.accessibility", defaultValue: "Hide sidebar"))
+            }
+            .padding(.horizontal, DesignSystem.Metrics.sidebarInset)
+            .offset(y: -2)
+        }
+    }
+
+    private var collapsedRailHeader: some View {
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: DesignSystem.Metrics.sidebarHeaderTopInset)
+                .background(
+                    WindowDragHandleView()
+                        .background(TitlebarDoubleClickMonitorView())
+                )
+
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                Button(action: onToggleSidebar) {
+                    Image(systemName: "sidebar.right")
+                        .font(DesignSystem.Typography.iconButton)
+                        .foregroundColor(DesignSystem.Color.textPrimary.dsColor.opacity(0.72))
+                        .frame(width: DesignSystem.Metrics.sidebarRailItemSize, height: DesignSystem.Metrics.sidebarRailItemSize)
+                        .background(
+                            RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.iconButton, style: .continuous)
+                                .fill(DesignSystem.Color.quietControlFill.dsColor)
+                        )
+                }
+                .buttonStyle(.plain)
+                .safeHelp(String(localized: "sidebar.expand.tooltip", defaultValue: "Show sidebar"))
+                .accessibilityLabel(String(localized: "sidebar.expand.accessibility", defaultValue: "Show sidebar"))
+            }
+            .padding(.horizontal, DesignSystem.Metrics.sidebarInset)
+            .offset(y: -2)
+
+            Button(action: { tabManager.addTab() }) {
+                Image(systemName: "plus")
+                    .font(DesignSystem.Typography.iconButton)
+                    .foregroundColor(DesignSystem.Color.primaryActionForeground.dsColor)
+                    .frame(width: DesignSystem.Metrics.sidebarRailItemSize, height: DesignSystem.Metrics.sidebarRailItemSize)
+                    .background(
+                        RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.control, style: .continuous)
+                            .fill(DesignSystem.Color.primaryActionFill.dsColor)
+                    )
+            }
+            .buttonStyle(.plain)
+            .safeHelp(String(localized: "sidebar.newWorkspace.tooltip", defaultValue: "Create a new workspace"))
+            .padding(.top, DesignSystem.Metrics.sidebarHeaderToPrimaryGap)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var primaryWorkspaceAction: some View {
+        Button(action: { tabManager.addTab() }) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus")
+                    .font(DesignSystem.Typography.iconButton)
+                Text(String(localized: "sidebar.newWorkspace", defaultValue: "New Workspace"))
+                    .font(DesignSystem.Typography.primaryButton)
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(DesignSystem.Color.primaryActionForeground.dsColor)
+            .padding(.horizontal, DesignSystem.Metrics.sidebarInset)
+            .frame(height: DesignSystem.Metrics.sidebarPrimaryActionHeight)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.control, style: .continuous)
+                    .fill(DesignSystem.Color.primaryActionFill.dsColor)
+            )
+        }
+        .buttonStyle(.plain)
+        .safeHelp(String(localized: "sidebar.newWorkspace.tooltip", defaultValue: "Create a new workspace"))
+    }
+
+    private func selectWorkspace(_ tab: Tab, index: Int) {
+        tabManager.selectTab(tab)
+        selection = .tabs
+        selectedTabIds = [tab.id]
+        lastSidebarSelectionIndex = index
+    }
+
+    private var collapsedRailList: some View {
+        ScrollView {
+            VStack(spacing: DesignSystem.Metrics.sidebarHeaderToPrimaryGap) {
+                ForEach(Array(tabManager.tabs.enumerated()), id: \.element.id) { index, tab in
+                    let isSelected = tabManager.selectedTabId == tab.id
+                    Button(action: { selectWorkspace(tab, index: index) }) {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(DesignSystem.Color.textPrimary.dsColor)
+                                .frame(width: DesignSystem.Metrics.sidebarRailItemSize, height: DesignSystem.Metrics.sidebarRailItemSize)
+                                .background(
+                                    RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous)
+                                        .fill(isSelected ? DesignSystem.Color.sidebarRowSelectedFill.dsColor : Color.clear)
+                                )
+
+                            if notificationStore.unreadCount(forTabId: tab.id) > 0 {
+                                Circle()
+                                    .fill(DesignSystem.Color.sidebarUnreadBadgeFill.dsColor)
+                                    .frame(width: 8, height: 8)
+                                    .offset(x: 2, y: -2)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .safeHelp(tab.title)
+                }
+            }
+            .padding(.top, DesignSystem.Metrics.sidebarPrimaryToListGap)
+            .padding(.horizontal, DesignSystem.Metrics.sidebarRailInset)
+            .padding(.bottom, DesignSystem.Metrics.sidebarInset)
+        }
+        .modifier(ClearScrollBackground())
     }
 
     private func decodeShortcut(from data: Data, fallback: StoredShortcut) -> StoredShortcut {
@@ -8723,120 +8814,107 @@ struct VerticalTabsSidebar: View {
             selectedRemoteContextMenuTargets.allSatisfy { $0.remoteConnectionState == .disconnected }
 
         VStack(spacing: 0) {
-            GeometryReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Space for traffic lights / fullscreen controls
-                        Spacer()
-                            .frame(height: trafficLightPadding)
+            if isCollapsed {
+                collapsedRailHeader
+                collapsedRailList
+            } else {
+                sidebarHeader
 
-                        LazyVStack(spacing: tabRowSpacing) {
-                            ForEach(tabs, id: \.id) { tab in
-                                let index = tabIndexById[tab.id] ?? 0
-                                let usesSelectedContextMenuTargets = selectedTabIds.contains(tab.id)
-                                let contextMenuWorkspaceIds = usesSelectedContextMenuTargets
-                                    ? selectedContextTargetIds
-                                    : [tab.id]
-                                let remoteContextMenuWorkspaceIds = usesSelectedContextMenuTargets
-                                    ? selectedRemoteContextMenuWorkspaceIds
-                                    : (tab.isRemoteWorkspace ? [tab.id] : [])
-                                let allRemoteContextMenuTargetsConnecting = usesSelectedContextMenuTargets
-                                    ? allSelectedRemoteContextMenuTargetsConnecting
-                                    : (tab.isRemoteWorkspace && tab.remoteConnectionState == .connecting)
-                                let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
-                                    ? allSelectedRemoteContextMenuTargetsDisconnected
-                                    : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
-                                TabItemView(
-                                    tabManager: tabManager,
-                                    notificationStore: notificationStore,
-                                    tab: tab,
-                                    index: index,
-                                    isActive: tabManager.selectedTabId == tab.id,
-                                    workspaceShortcutDigit: WorkspaceShortcutMapper.digitForWorkspace(
-                                        at: index,
-                                        workspaceCount: workspaceCount
-                                    ),
-                                    workspaceShortcutModifierSymbol: workspaceNumberShortcut.modifierDisplayString,
-                                    canCloseWorkspace: canCloseWorkspace,
-                                    accessibilityWorkspaceCount: workspaceCount,
-                                    unreadCount: notificationStore.unreadCount(forTabId: tab.id),
-                                    latestNotificationText: {
-                                        guard showsSidebarNotificationMessage,
-                                              let notification = notificationStore.latestNotification(forTabId: tab.id) else {
-                                            return nil
-                                        }
-                                        let text = notification.body.isEmpty ? notification.title : notification.body
-                                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        return trimmed.isEmpty ? nil : trimmed
-                                    }(),
-                                    rowSpacing: tabRowSpacing,
-                                    setSelectionToTabs: { selection = .tabs },
-                                    selectedTabIds: $selectedTabIds,
-                                    lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
-                                    showsModifierShortcutHints: modifierKeyMonitor.isModifierPressed,
-                                    dragAutoScrollController: dragAutoScrollController,
-                                    draggedTabId: $draggedTabId,
-                                    dropIndicator: $dropIndicator,
-                                    contextMenuWorkspaceIds: contextMenuWorkspaceIds,
-                                    remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
-                                    allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
-                                    allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
-                                    settings: tabItemSettings
-                                )
-                                .equatable()
+                primaryWorkspaceAction
+                    .padding(.horizontal, DesignSystem.Metrics.sidebarInset)
+                    .padding(.top, DesignSystem.Metrics.sidebarHeaderToPrimaryGap)
+                    .padding(.bottom, DesignSystem.Metrics.sidebarPrimaryToListGap)
+
+                GeometryReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            LazyVStack(spacing: tabRowSpacing) {
+                                ForEach(tabs, id: \.id) { tab in
+                                    let index = tabIndexById[tab.id] ?? 0
+                                    let usesSelectedContextMenuTargets = selectedTabIds.contains(tab.id)
+                                    let contextMenuWorkspaceIds = usesSelectedContextMenuTargets
+                                        ? selectedContextTargetIds
+                                        : [tab.id]
+                                    let remoteContextMenuWorkspaceIds = usesSelectedContextMenuTargets
+                                        ? selectedRemoteContextMenuWorkspaceIds
+                                        : (tab.isRemoteWorkspace ? [tab.id] : [])
+                                    let allRemoteContextMenuTargetsConnecting = usesSelectedContextMenuTargets
+                                        ? allSelectedRemoteContextMenuTargetsConnecting
+                                        : (tab.isRemoteWorkspace && tab.remoteConnectionState == .connecting)
+                                    let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
+                                        ? allSelectedRemoteContextMenuTargetsDisconnected
+                                        : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
+                                    TabItemView(
+                                        tabManager: tabManager,
+                                        notificationStore: notificationStore,
+                                        tab: tab,
+                                        index: index,
+                                        isActive: tabManager.selectedTabId == tab.id,
+                                        workspaceShortcutDigit: WorkspaceShortcutMapper.digitForWorkspace(
+                                            at: index,
+                                            workspaceCount: workspaceCount
+                                        ),
+                                        workspaceShortcutModifierSymbol: workspaceNumberShortcut.modifierDisplayString,
+                                        canCloseWorkspace: canCloseWorkspace,
+                                        accessibilityWorkspaceCount: workspaceCount,
+                                        unreadCount: notificationStore.unreadCount(forTabId: tab.id),
+                                        latestNotificationText: {
+                                            guard showsSidebarNotificationMessage,
+                                                  let notification = notificationStore.latestNotification(forTabId: tab.id) else {
+                                                return nil
+                                            }
+                                            let text = notification.body.isEmpty ? notification.title : notification.body
+                                            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            return trimmed.isEmpty ? nil : trimmed
+                                        }(),
+                                        rowSpacing: tabRowSpacing,
+                                        setSelectionToTabs: { selection = .tabs },
+                                        selectedTabIds: $selectedTabIds,
+                                        lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+                                        showsModifierShortcutHints: modifierKeyMonitor.isModifierPressed,
+                                        dragAutoScrollController: dragAutoScrollController,
+                                        draggedTabId: $draggedTabId,
+                                        dropIndicator: $dropIndicator,
+                                        contextMenuWorkspaceIds: contextMenuWorkspaceIds,
+                                        remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
+                                        allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
+                                        allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
+                                        settings: tabItemSettings
+                                    )
+                                    .equatable()
+                                }
                             }
-                        }
-                        .padding(.vertical, 8)
+                            .padding(.bottom, 10)
 
-                        SidebarEmptyArea(
-                            rowSpacing: tabRowSpacing,
-                            selection: $selection,
-                            selectedTabIds: $selectedTabIds,
-                            lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
-                            dragAutoScrollController: dragAutoScrollController,
-                            draggedTabId: $draggedTabId,
-                            dropIndicator: $dropIndicator
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            SidebarEmptyArea(
+                                rowSpacing: tabRowSpacing,
+                                selection: $selection,
+                                selectedTabIds: $selectedTabIds,
+                                lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+                                dragAutoScrollController: dragAutoScrollController,
+                                draggedTabId: $draggedTabId,
+                                dropIndicator: $dropIndicator
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .padding(.horizontal, 2)
+                        .frame(minHeight: proxy.size.height, alignment: .top)
                     }
-                    .frame(minHeight: proxy.size.height, alignment: .top)
+                    .background(
+                        SidebarScrollViewResolver { scrollView in
+                            dragAutoScrollController.attach(scrollView: scrollView)
+                        }
+                        .frame(width: 0, height: 0)
+                    )
+                    .background(Color.clear)
+                    .modifier(ClearScrollBackground())
                 }
-                .background(
-                    SidebarScrollViewResolver { scrollView in
-                        dragAutoScrollController.attach(scrollView: scrollView)
-                    }
-                    .frame(width: 0, height: 0)
-                )
-                .overlay(alignment: .top) {
-                    SidebarTopScrim(height: trafficLightPadding + 20)
-                        .allowsHitTesting(false)
-                }
-                .overlay(alignment: .top) {
-                    // Match native titlebar behavior in the sidebar top strip:
-                    // drag-to-move and double-click action (zoom/minimize).
-                    WindowDragHandleView()
-                        .frame(height: trafficLightPadding)
-                        .background(TitlebarDoubleClickMonitorView())
-                }
-                .overlay(alignment: .topLeading) {
-                    if isMinimalMode {
-                        HiddenTitlebarSidebarControlsView(notificationStore: notificationStore)
-                            .padding(.leading, hiddenTitlebarControlsLeadingInset)
-                            .padding(.top, 2)
-                    }
-                }
-                .background(Color.clear)
-                .modifier(ClearScrollBackground())
+                SidebarFooter(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            SidebarFooter(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityIdentifier("Sidebar")
-        .ignoresSafeArea()
-        .background(SidebarBackdrop().ignoresSafeArea())
-        .overlay(alignment: .trailing) {
-            SidebarTrailingBorder()
-        }
+        .background(Color.clear)
         .background(
             WindowAccessor { window in
                 modifierKeyMonitor.setHostWindow(window)
@@ -9772,14 +9850,7 @@ private struct SidebarFooter: View {
     let onSendFeedback: () -> Void
 
     var body: some View {
-#if DEBUG
-        SidebarDevFooter(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
-#else
-        SidebarFooterButtons(updateViewModel: updateViewModel, onSendFeedback: onSendFeedback)
-            .padding(.leading, 6)
-            .padding(.trailing, 10)
-            .padding(.bottom, 6)
-#endif
+        EmptyView()
     }
 }
 
@@ -10937,40 +11008,6 @@ private struct SidebarDevFooter: View {
 }
 #endif
 
-private struct SidebarTopScrim: View {
-    let height: CGFloat
-
-    var body: some View {
-        SidebarTopBlurEffect()
-            .frame(height: height)
-            .mask(
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.95),
-                        Color.black.opacity(0.75),
-                        Color.black.opacity(0.35),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-    }
-}
-
-private struct SidebarTopBlurEffect: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.blendingMode = .withinWindow
-        view.material = .underWindowBackground
-        view.state = .active
-        view.isEmphasized = false
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
 private struct SidebarScrollViewResolver: NSViewRepresentable {
     let onResolve: (NSScrollView?) -> Void
 
@@ -11042,7 +11079,7 @@ private struct SidebarEmptyArea: View {
             .overlay(alignment: .top) {
                 if shouldShowTopDropIndicator {
                     Rectangle()
-                        .fill(cmuxAccentColor())
+                        .fill(DesignSystem.Color.sidebarUnreadBadgeFill.dsColor)
                         .frame(height: 2)
                         .padding(.horizontal, 8)
                         .offset(y: -(rowSpacing / 2))
@@ -11279,7 +11316,7 @@ private struct TabItemView: View, Equatable {
     }
 
     private var showsLeadingRail: Bool {
-        explicitRailColor != nil
+        false
     }
 
     private var activeBorderLineWidth: CGFloat {
@@ -11287,7 +11324,7 @@ private struct TabItemView: View, Equatable {
         case .leftRail:
             return 0
         case .solidFill:
-            return isActive ? 1.5 : 0
+            return isActive || isMultiSelected ? 1 : 0
         }
     }
 
@@ -11297,12 +11334,12 @@ private struct TabItemView: View, Equatable {
         case .leftRail:
             return .clear
         case .solidFill:
-            return Color.primary.opacity(0.5)
+            return isActive ? DesignSystem.Color.sidebarActiveBorder.dsColor : DesignSystem.Color.panelBorder.dsColor
         }
     }
 
     private var usesInvertedActiveForeground: Bool {
-        isActive
+        false
     }
 
     private var activePrimaryTextColor: Color {
@@ -11321,15 +11358,7 @@ private struct TabItemView: View, Equatable {
         if let hex = sidebarNotificationBadgeColorHex, let nsColor = NSColor(hex: hex) {
             return Color(nsColor: nsColor)
         }
-        return usesInvertedActiveForeground ? Color.white.opacity(0.25) : cmuxAccentColor()
-    }
-
-    private var activeProgressTrackColor: Color {
-        usesInvertedActiveForeground ? Color.white.opacity(0.15) : Color.secondary.opacity(0.2)
-    }
-
-    private var activeProgressFillColor: Color {
-        usesInvertedActiveForeground ? Color.white.opacity(0.8) : cmuxAccentColor()
+        return DesignSystem.Color.sidebarUnreadBadgeFill.dsColor
     }
 
     private var shortcutHintEmphasis: Double {
@@ -11455,7 +11484,6 @@ private struct TabItemView: View, Equatable {
         let moveUpActionText = String(localized: "sidebar.workspace.moveUpAction", defaultValue: "Move Up")
         let moveDownActionText = String(localized: "sidebar.workspace.moveDownAction", defaultValue: "Move Down")
         let latestNotificationSubtitle = latestNotificationText
-        let effectiveSubtitle = latestNotificationSubtitle
         let detailVisibility = visibleAuxiliaryDetails
         let orderedPanelIds: [UUID]? = (detailVisibility.showsBranchDirectory || detailVisibility.showsPullRequests)
             ? tab.sidebarOrderedPanelIds()
@@ -11481,19 +11509,11 @@ private struct TabItemView: View, Equatable {
             gitSummary: compactGitBranchSummaryText,
             directorySummary: compactDirectorySummaryText
         )
-        let branchDirectoryLines: [VerticalBranchDirectoryLine] = {
-            guard detailVisibility.showsBranchDirectory,
-                  sidebarBranchVerticalLayout,
-                  let orderedPanelIds else {
-                return []
-            }
-            return verticalBranchDirectoryLines(orderedPanelIds: orderedPanelIds)
+        let remoteSubtitle: String? = {
+            guard sidebarShowSSH, let remoteWorkspaceSidebarText else { return nil }
+            return remoteWorkspaceSidebarText + " · " + remoteConnectionStatusText
         }()
-        let branchLinesContainBranch = sidebarShowGitBranch && branchDirectoryLines.contains { $0.branch != nil }
-        let pullRequestRows: [PullRequestDisplay] = {
-            guard detailVisibility.showsPullRequests, let orderedPanelIds else { return [] }
-            return pullRequestDisplays(orderedPanelIds: orderedPanelIds)
-        }()
+        let effectiveSubtitle = latestNotificationSubtitle ?? remoteSubtitle ?? compactBranchDirectoryRow
 
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
@@ -11566,186 +11586,22 @@ private struct TabItemView: View, Equatable {
                 Text(subtitle)
                     .font(.system(size: 10))
                     .foregroundColor(activeSecondaryColor(0.8))
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.leading)
             }
 
-            remoteWorkspaceSection
-
-            if detailVisibility.showsMetadata {
-                let metadataEntries = tab.sidebarStatusEntriesInDisplayOrder()
-                let metadataBlocks = tab.sidebarMetadataBlocksInDisplayOrder()
-                if !metadataEntries.isEmpty {
-                    SidebarMetadataRows(
-                        entries: metadataEntries,
-                        isActive: usesInvertedActiveForeground,
-                        onFocus: { updateSelection() }
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                if !metadataBlocks.isEmpty {
-                    SidebarMetadataMarkdownBlocks(
-                        blocks: metadataBlocks,
-                        isActive: usesInvertedActiveForeground,
-                        onFocus: { updateSelection() }
-                    )
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-
-            // Latest log entry
-            if detailVisibility.showsLog, let latestLog = tab.logEntries.last {
-                HStack(spacing: 4) {
-                    Image(systemName: logLevelIcon(latestLog.level))
-                        .font(.system(size: 8))
-                        .foregroundColor(logLevelColor(latestLog.level, isActive: usesInvertedActiveForeground))
-                    Text(latestLog.message)
-                        .font(.system(size: 10))
-                        .foregroundColor(activeSecondaryColor(0.8))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // Progress bar
-            if detailVisibility.showsProgress, let progress = tab.progress {
-                VStack(alignment: .leading, spacing: 2) {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(activeProgressTrackColor)
-                            Capsule()
-                                .fill(activeProgressFillColor)
-                                .frame(width: max(0, geo.size.width * CGFloat(progress.value)))
-                        }
-                    }
-                    .frame(height: 3)
-
-                    if let label = progress.label {
-                        Text(label)
-                            .font(.system(size: 9))
-                            .foregroundColor(activeSecondaryColor(0.6))
-                            .lineLimit(1)
-                    }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // Branch + directory row
-            if detailVisibility.showsBranchDirectory {
-                if sidebarBranchVerticalLayout {
-                    if !branchDirectoryLines.isEmpty {
-                        HStack(alignment: .top, spacing: 3) {
-                            if sidebarShowGitBranchIcon, branchLinesContainBranch {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(activeSecondaryColor(0.6))
-                            }
-                            VStack(alignment: .leading, spacing: 1) {
-                                ForEach(Array(branchDirectoryLines.enumerated()), id: \.offset) { _, line in
-                                    HStack(spacing: 3) {
-                                        if let branch = line.branch {
-                                            Text(branch)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundColor(activeSecondaryColor(0.75))
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                        }
-                                        if line.branch != nil, line.directory != nil {
-                                            Image(systemName: "circle.fill")
-                                                .font(.system(size: 3))
-                                                .foregroundColor(activeSecondaryColor(0.6))
-                                                .padding(.horizontal, 1)
-                                        }
-                                        if let directory = line.directory {
-                                            Text(directory)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundColor(activeSecondaryColor(0.75))
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if let dirRow = compactBranchDirectoryRow {
-                    HStack(spacing: 3) {
-                        if sidebarShowGitBranchIcon, compactGitBranchSummaryText != nil {
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: 9))
-                                .foregroundColor(activeSecondaryColor(0.6))
-                        }
-                        Text(dirRow)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(activeSecondaryColor(0.75))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-            }
-
-            // Pull request rows
-            if detailVisibility.showsPullRequests, !pullRequestRows.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(pullRequestRows) { pullRequest in
-                        Button(action: {
-                            openPullRequestLink(pullRequest.url)
-                        }) {
-                            HStack(spacing: 4) {
-                                PullRequestStatusIcon(
-                                    status: pullRequest.status,
-                                    color: pullRequestForegroundColor
-                                )
-                                Text("\(pullRequest.label) #\(pullRequest.number)")
-                                    .underline()
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                Text(pullRequestStatusLabel(pullRequest.status, checks: pullRequest.checks))
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(pullRequestForegroundColor)
-                        }
-                        .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.pullRequest.openTooltip", defaultValue: "Open \(pullRequest.label) #\(pullRequest.number)"))
-                    }
-                }
-            }
-
-            // Ports row
-            if detailVisibility.showsPorts, !tab.listeningPorts.isEmpty {
-                HStack(spacing: 4) {
-                    ForEach(tab.listeningPorts, id: \.self) { port in
-                        Button(action: {
-                            openPortLink(port)
-                        }) {
-                            Text(String(localized: "sidebar.port.label", defaultValue: ":\(port)"))
-                                .underline()
-                        }
-                        .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.port.openTooltip", defaultValue: "Open localhost:\(port)"))
-                    }
-                    Spacer(minLength: 0)
-                }
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(activeSecondaryColor(0.75))
-                .lineLimit(1)
-            }
         }
         .animation(.easeInOut(duration: 0.2), value: tab.logEntries.count)
         .animation(.easeInOut(duration: 0.2), value: tab.progress != nil)
         .animation(.easeInOut(duration: 0.2), value: tab.metadataBlocks.count)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous)
                 .fill(backgroundColor)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous)
                         .strokeBorder(activeBorderColor, lineWidth: activeBorderLineWidth)
                 }
                 .overlay(alignment: .leading) {
@@ -11759,7 +11615,7 @@ private struct TabItemView: View, Equatable {
                     }
                 }
         )
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 10)
         .background {
             GeometryReader { proxy in
                 Color.clear
@@ -11784,7 +11640,7 @@ private struct TabItemView: View, Equatable {
         .overlay(alignment: .top) {
             if showsCenteredTopDropIndicator {
                 Rectangle()
-                    .fill(cmuxAccentColor())
+                    .fill(DesignSystem.Color.sidebarUnreadBadgeFill.dsColor)
                     .frame(height: 2)
                     .padding(.horizontal, 8)
                     .offset(y: index == 0 ? 0 : -(rowSpacing / 2))
@@ -12062,22 +11918,18 @@ private struct TabItemView: View, Equatable {
         if let hex = sidebarSelectionColorHex, let parsed = NSColor(hex: hex) {
             return parsed
         }
-        return cmuxAccentNSColor(for: colorScheme)
+        return DesignSystem.Color.sidebarRowSelectedFill
     }
 
     private var backgroundColor: Color {
         switch activeTabIndicatorStyle {
         case .leftRail:
-            if isActive        { return Color(nsColor: selectionBackgroundColor) }
-            if isMultiSelected { return cmuxAccentColor().opacity(0.25) }
+            if isActive        { return DesignSystem.Color.sidebarRowSelectedFill.dsColor }
+            if isMultiSelected { return DesignSystem.Color.sidebarRowMultiSelectedFill.dsColor }
             return Color.clear
         case .solidFill:
-            if isActive { return Color(nsColor: selectionBackgroundColor) }
-            if let custom = resolvedCustomTabColor {
-                if isMultiSelected { return custom.opacity(0.35) }
-                return custom.opacity(0.7)
-            }
-            if isMultiSelected { return cmuxAccentColor().opacity(0.25) }
+            if isActive { return DesignSystem.Color.sidebarRowSelectedFill.dsColor }
+            if isMultiSelected { return DesignSystem.Color.sidebarRowMultiSelectedFill.dsColor }
             return Color.clear
         }
     }
@@ -13958,144 +13810,6 @@ private struct TitlebarLeadingInsetReader: NSViewRepresentable {
                 inset = leading
             }
         }
-    }
-}
-
-/// 1px trailing border on the sidebar, derived from the terminal chrome background
-/// using the same logic as bonsplit's TabBarColors.nsColorSeparator:
-/// dark bg → lighten RGB by 0.16 at 0.36 alpha; light bg → darken by 0.12 at 0.26 alpha.
-private struct SidebarTrailingBorder: View {
-    @AppStorage("sidebarMatchTerminalBackground") private var matchTerminalBackground = false
-    @State private var separatorColor: NSColor = chromeSeparatorColor()
-
-    var body: some View {
-        if matchTerminalBackground {
-            Rectangle()
-                .fill(Color(nsColor: separatorColor))
-                .frame(width: 1)
-                .ignoresSafeArea()
-                .onAppear {
-                    separatorColor = Self.chromeSeparatorColor()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
-                    separatorColor = Self.chromeSeparatorColor()
-                }
-        }
-    }
-
-    /// Replicates bonsplit TabBarColors.nsColorSeparator derivation from chrome background.
-    private static func chromeSeparatorColor() -> NSColor {
-        let chrome = GhosttyBackgroundTheme.currentColor()
-        let srgb = chrome.usingColorSpace(.sRGB) ?? chrome
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        srgb.getRed(&r, green: &g, blue: &b, alpha: &a)
-        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
-        let isLight = luminance > 0.5
-        let amount: CGFloat = isLight ? -0.12 : 0.16
-        let alpha: CGFloat = isLight ? 0.26 : 0.36
-        return NSColor(
-            red: min(1.0, max(0.0, r + amount)),
-            green: min(1.0, max(0.0, g + amount)),
-            blue: min(1.0, max(0.0, b + amount)),
-            alpha: alpha
-        )
-    }
-}
-
-/// Sidebar background that uses the same technique as TitlebarLayerBackground:
-/// fully opaque layer color + layer-level opacity. This matches how the terminal's
-/// Metal surface composites its background.
-private struct SidebarTerminalBackgroundView: NSViewRepresentable {
-    let backgroundColor: NSColor
-    let opacity: CGFloat
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = backgroundColor.withAlphaComponent(1.0).cgColor
-        view.layer?.opacity = Float(opacity)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.layer?.backgroundColor = backgroundColor.withAlphaComponent(1.0).cgColor
-        nsView.layer?.opacity = Float(opacity)
-    }
-}
-
-private struct SidebarBackdrop: View {
-    @AppStorage("sidebarMatchTerminalBackground") private var matchTerminalBackground = false
-    @AppStorage("sidebarTintOpacity") private var sidebarTintOpacity = SidebarTintDefaults.opacity
-    @AppStorage("sidebarTintHex") private var sidebarTintHex = SidebarTintDefaults.hex
-    @AppStorage("sidebarTintHexLight") private var sidebarTintHexLight: String?
-    @AppStorage("sidebarTintHexDark") private var sidebarTintHexDark: String?
-    @AppStorage("sidebarMaterial") private var sidebarMaterial = SidebarMaterialOption.sidebar.rawValue
-    @AppStorage("sidebarBlendMode") private var sidebarBlendMode = SidebarBlendModeOption.withinWindow.rawValue
-    @AppStorage("sidebarState") private var sidebarState = SidebarStateOption.followWindow.rawValue
-    @AppStorage("sidebarCornerRadius") private var sidebarCornerRadius = 0.0
-    @AppStorage("sidebarBlurOpacity") private var sidebarBlurOpacity = 1.0
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var terminalBackgroundColor: NSColor = GhosttyBackgroundTheme.currentColor()
-
-    var body: some View {
-        let cornerRadius = CGFloat(max(0, sidebarCornerRadius))
-
-        if matchTerminalBackground {
-            // The terminal background is provided by a single CALayer, so
-            // the sidebar uses the configured opacity directly.
-            let alpha = CGFloat(GhosttyApp.shared.defaultBackgroundOpacity)
-            return AnyView(
-                SidebarTerminalBackgroundView(
-                    backgroundColor: GhosttyApp.shared.defaultBackgroundColor,
-                    opacity: alpha
-                )
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
-                    terminalBackgroundColor = GhosttyBackgroundTheme.currentColor()
-                }
-            )
-        }
-
-        let materialOption = SidebarMaterialOption(rawValue: sidebarMaterial)
-        let blendingMode = SidebarBlendModeOption(rawValue: sidebarBlendMode)?.mode ?? .behindWindow
-        let state = SidebarStateOption(rawValue: sidebarState)?.state ?? .active
-        let resolvedHex: String = {
-            if colorScheme == .dark, let dark = sidebarTintHexDark {
-                return dark
-            } else if colorScheme == .light, let light = sidebarTintHexLight {
-                return light
-            }
-            return sidebarTintHex
-        }()
-        let tintColor = (NSColor(hex: resolvedHex) ?? NSColor(hex: sidebarTintHex) ?? .black).withAlphaComponent(sidebarTintOpacity)
-        let useLiquidGlass = materialOption?.usesLiquidGlass ?? false
-        let useWindowLevelGlass = useLiquidGlass && blendingMode == .behindWindow
-
-        return AnyView(
-            ZStack {
-                if let material = materialOption?.material {
-                    // When using liquidGlass + behindWindow, window handles glass + tint
-                    // Sidebar is fully transparent
-                    if !useWindowLevelGlass {
-                        SidebarVisualEffectBackground(
-                            material: material,
-                            blendingMode: blendingMode,
-                            state: state,
-                            opacity: sidebarBlurOpacity,
-                            tintColor: tintColor,
-                            cornerRadius: cornerRadius,
-                            preferLiquidGlass: useLiquidGlass
-                        )
-                        // Tint overlay for NSVisualEffectView fallback
-                        if !useLiquidGlass {
-                            Color(nsColor: tintColor)
-                        }
-                    }
-                }
-                // When material is none or useWindowLevelGlass, render nothing
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        )
     }
 }
 

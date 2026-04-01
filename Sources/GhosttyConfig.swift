@@ -21,13 +21,13 @@ struct GhosttyConfig {
     var splitDividerColor: NSColor?
 
     // Colors (from theme or config)
-    var backgroundColor: NSColor = NSColor(hex: "#272822")!
+    var backgroundColor: NSColor = NSColor(hex: "#FFFFFF")!
     var backgroundOpacity: Double = 1.0
-    var foregroundColor: NSColor = NSColor(hex: "#fdfff1")!
-    var cursorColor: NSColor = NSColor(hex: "#c0c1b5")!
-    var cursorTextColor: NSColor = NSColor(hex: "#8d8e82")!
-    var selectionBackground: NSColor = NSColor(hex: "#57584f")!
-    var selectionForeground: NSColor = NSColor(hex: "#fdfff1")!
+    var foregroundColor: NSColor = NSColor(hex: "#111315")!
+    var cursorColor: NSColor = NSColor(hex: "#1A4731")!
+    var cursorTextColor: NSColor = NSColor(hex: "#FFFFFF")!
+    var selectionBackground: NSColor = NSColor(hex: "#DCE8DF")!
+    var selectionForeground: NSColor = NSColor(hex: "#111315")!
 
     // Sidebar appearance
     var rawSidebarBackground: String?
