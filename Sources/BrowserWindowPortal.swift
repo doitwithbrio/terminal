@@ -1611,10 +1611,11 @@ final class WindowBrowserSlotView: NSView {
         paneDropTargetView.slotView = self
 
         dropZoneOverlayView.wantsLayer = true
-        dropZoneOverlayView.layer?.backgroundColor = cmuxAccentNSColor().withAlphaComponent(0.25).cgColor
-        dropZoneOverlayView.layer?.borderColor = cmuxAccentNSColor().cgColor
+        let ernestGreen = NSColor(srgbRed: 26.0 / 255.0, green: 71.0 / 255.0, blue: 49.0 / 255.0, alpha: 1.0)
+        dropZoneOverlayView.layer?.backgroundColor = ernestGreen.withAlphaComponent(0.12).cgColor
+        dropZoneOverlayView.layer?.borderColor = ernestGreen.withAlphaComponent(0.5).cgColor
         dropZoneOverlayView.layer?.borderWidth = 2
-        dropZoneOverlayView.layer?.cornerRadius = 8
+        dropZoneOverlayView.layer?.cornerRadius = 18
         dropZoneOverlayView.isHidden = true
         addSubview(paneDropTargetView, positioned: .above, relativeTo: nil)
     }

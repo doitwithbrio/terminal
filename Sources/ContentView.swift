@@ -2374,7 +2374,10 @@ struct ContentView: View {
     }
 
     private var terminalTopInset: CGFloat {
-        (isFullScreen && !isMinimalMode) ? effectiveTitlebarPadding : 0
+        // Previously pushed content below the titlebar to prevent tab drags from being
+        // interpreted as window drags. Now tab reordering requires explicit edit mode,
+        // so the tab bar can safely live in the titlebar zone (like the sidebar header).
+        0
     }
 
     private var terminalContent: some View {
@@ -2436,7 +2439,7 @@ struct ContentView: View {
         }
         .padding(.top, terminalTopInset)
         .overlay(alignment: .top) {
-            if isFullScreen && !isMinimalMode {
+            if !isMinimalMode {
                 customTitlebar
             }
         }
@@ -2477,10 +2480,19 @@ struct ContentView: View {
     }
 
     private var customTitlebar: some View {
-        ZStack {
-            // Enable window dragging from the titlebar strip without making the entire content
-            // view draggable (which breaks drag gestures like tab reordering).
-            WindowDragHandleView()
+        // The titlebar overlay provides window dragging (in windowed mode) and
+        // fullscreen controls (when sidebar is hidden). The drag handle only covers
+        // the inset zone above tab pills (~12pt) to avoid blocking tab interactions.
+        // In fullscreen, window dragging is not needed — only controls are shown.
+        let dragHeight: CGFloat = isFullScreen ? 0 : DesignSystem.Metrics.sidebarInset
+        return ZStack(alignment: .top) {
+            // Window drag handle — only in windowed mode, covers the narrow zone above tab pills
+            if !isFullScreen {
+                WindowDragHandleView()
+                    .background(TitlebarDoubleClickMonitorView())
+                    .frame(height: dragHeight)
+                    .frame(maxWidth: .infinity)
+            }
 
             TitlebarLeadingInsetReader(inset: $titlebarLeadingInset)
                 .allowsHitTesting(false)
@@ -2498,10 +2510,9 @@ struct ContentView: View {
             .padding(.leading, (isFullScreen && !sidebarState.showsSidebarColumn) ? 8 : (sidebarState.showsSidebarColumn ? 12 : titlebarLeadingInset + CGFloat(debugTitlebarLeadingExtra)))
             .padding(.trailing, 8)
         }
-        .frame(height: titlebarPadding)
+        .frame(height: isFullScreen ? titlebarPadding : dragHeight)
         .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .background(TitlebarDoubleClickMonitorView())
+        .allowsHitTesting(!isMinimalMode)
         .background(Color.clear)
     }
 
@@ -3055,6 +3066,10 @@ struct ContentView: View {
         })
 
         view = AnyView(view.onChange(of: isMinimalMode) { _, _ in
+            syncTrafficLightInset()
+        })
+
+        view = AnyView(view.onChange(of: tabManager.tabs.count) { _, _ in
             syncTrafficLightInset()
         })
 

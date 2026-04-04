@@ -3041,10 +3041,13 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private var surfaceCallbackContext: Unmanaged<GhosttySurfaceCallbackContext>?
     /// The desired focus state for the Ghostty C surface. May be set before the
     /// C surface exists (e.g. during layout restoration); `createSurface` syncs
-    /// it on creation. Also used as a dedup guard to avoid redundant
-    /// `ghostty_surface_set_focus` calls (prevents prompt redraws with P10k).
-    /// Initialized to `true` to match Ghostty's default (Terminal.zig focused=true).
-    private var desiredFocusState: Bool = true
+    /// it on creation.
+    /// Initialized to `false` so newly created runtime surfaces do not eagerly
+    /// trigger focus-sensitive prompt redraws before AppKit focus converges.
+    private var desiredFocusState: Bool = false
+    /// Tracks the focus state last applied to the live C surface so AppKit focus
+    /// churn can avoid replaying redundant focus transitions.
+    private var lastAppliedFocusState: Bool?
 #if DEBUG
     private var needsConfirmCloseOverrideForTesting: Bool?
     private var runtimeSurfaceFreedOutOfBandForTesting = false
@@ -3249,6 +3252,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             surfaceCallbackContext = nil
             registry.unregisterRuntimeSurface(surface, ownerId: id)
             self.surface = nil
+            lastAppliedFocusState = nil
             activePortalHostLease = nil
             recordTeardownRequest(reason: reason)
             markPortalLifecycleClosed(reason: reason)
@@ -3459,6 +3463,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         }
         surface = nil
+        lastAppliedFocusState = nil
 
         guard let surfaceToFree else {
             callbackContext?.release()
@@ -3603,6 +3608,15 @@ final class TerminalSurface: Identifiable, ObservableObject {
 #if DEBUG
                 dlog(
                     "surface.attach.defer surface=\(id.uuidString.prefix(5)) reason=noWindow " +
+                    "bounds=\(String(format: "%.1fx%.1f", view.bounds.width, view.bounds.height))"
+                )
+#endif
+                return
+            }
+            guard view.bounds.width > 1, view.bounds.height > 1 else {
+#if DEBUG
+                dlog(
+                    "surface.attach.defer surface=\(id.uuidString.prefix(5)) reason=tinyBounds " +
                     "bounds=\(String(format: "%.1fx%.1f", view.bounds.width, view.bounds.height))"
                 )
 #endif
@@ -3931,12 +3945,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
             }
         }
 
-        // Sync the desired focus state to the newly created C surface. Ghostty
-        // surfaces default to focused=true, but this surface may have been
-        // logically unfocused before the C surface existed (e.g. during layout
-        // restoration). Always sync unconditionally so we don't couple to
-        // Ghostty's default.
-        ghostty_surface_set_focus(createdSurface, desiredFocusState)
+        // Sync the desired focus state to the newly created C surface, but only
+        // claim focused=true when AppKit focus ownership has actually converged.
+        let initialFocusedState = desiredFocusState && view.canApplyFocusedSurfaceState
+        applyFocusStateIfNeeded(initialFocusedState, to: createdSurface)
 
         NotificationCenter.default.post(
             name: .terminalSurfaceDidBecomeReady,
@@ -3949,11 +3961,18 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
         flushPendingTextIfNeeded()
 
-        // Kick an initial draw after creation/size setup. On some startup paths Ghostty can
-        // miss the first vsync callback and sit on a blank frame until another focus/visibility
-        // transition nudges the renderer.
-        view.forceRefreshSurface()
-        ghostty_surface_refresh(createdSurface)
+        // Kick an initial draw for surfaces that are not already the active first
+        // responder (including descendant responders). Focused fresh tabs will get
+        // a reveal during first-responder/display-id convergence, and forcing an
+        // extra refresh here can duplicate prompt-side redraws.
+        let responderOwnsTerminalFocus = {
+            guard let firstResponder = view.window?.firstResponder as? NSView else { return false }
+            return firstResponder === view || firstResponder.isDescendant(of: view)
+        }()
+        if !responderOwnsTerminalFocus {
+            view.forceRefreshSurface()
+            ghostty_surface_refresh(createdSurface)
+        }
 
 #if DEBUG
         let runtimeFontText = cmuxCurrentSurfaceFontSizePoints(createdSurface).map {
@@ -4063,21 +4082,29 @@ final class TerminalSurface: Identifiable, ObservableObject {
     }
 
     /// Keep `desiredFocusState` in sync when the hosted view's responder chain
-    /// calls `ghostty_surface_set_focus` directly (bypassing `setFocus`).
-    /// Without this, `createSurface` would replay a stale state on recreation.
+    /// changes focus before the C surface exists.
     func recordExternalFocusState(_ focused: Bool) {
         desiredFocusState = focused
     }
 
+    private func applyFocusStateIfNeeded(_ focused: Bool, to surface: ghostty_surface_t) {
+        guard lastAppliedFocusState != focused else { return }
+        ghostty_surface_set_focus(surface, focused)
+        lastAppliedFocusState = focused
+    }
+
+    @MainActor
     func setFocus(_ focused: Bool) {
-        // Only send focus events when the state changes to avoid redundant
-        // prompt redraws with zsh themes like Powerlevel10k.
-        guard focused != desiredFocusState else { return }
+        // Only send focus events when the applied state changes to avoid
+        // redundant prompt redraws with zsh themes like Powerlevel10k.
         desiredFocusState = focused
+        if focused {
+            guard let attachedView, attachedView.canApplyFocusedSurfaceState else { return }
+        }
         // Track desired state even before the C surface exists (e.g. during
         // layout restoration). createSurface syncs the state once created.
-        guard let surface = surface else { return }
-        ghostty_surface_set_focus(surface, focused)
+        guard let surface = liveSurfaceForGhosttyAccess(reason: "focus.set") else { return }
+        applyFocusStateIfNeeded(focused, to: surface)
 
         // If we focus a surface while it is being rapidly reparented (closing splits, etc),
         // Ghostty's CVDisplayLink can end up started before the display id is valid, leaving
@@ -4188,7 +4215,13 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
 
         guard allowsRuntimeSurfaceCreation() else { return }
-        guard surface == nil, attachedView != nil else { return }
+        guard surface == nil, let view = attachedView else { return }
+        guard view.window != nil else { return }
+        guard view.isVisibleInUI, !view.isHiddenOrHasHiddenAncestor else { return }
+        guard view.bounds.width > 1, view.bounds.height > 1 else { return }
+        if desiredFocusState {
+            guard view.canApplyFocusedSurfaceState else { return }
+        }
         guard !backgroundSurfaceStartQueued else { return }
         backgroundSurfaceStartQueued = true
 
@@ -4197,6 +4230,12 @@ final class TerminalSurface: Identifiable, ObservableObject {
             self.backgroundSurfaceStartQueued = false
             guard self.allowsRuntimeSurfaceCreation() else { return }
             guard self.surface == nil, let view = self.attachedView else { return }
+            guard view.window != nil else { return }
+            guard view.isVisibleInUI, !view.isHiddenOrHasHiddenAncestor else { return }
+            guard view.bounds.width > 1, view.bounds.height > 1 else { return }
+            if self.desiredFocusState {
+                guard view.canApplyFocusedSurfaceState else { return }
+            }
             #if DEBUG
             let startedAt = ProcessInfo.processInfo.systemUptime
             #endif
@@ -4304,6 +4343,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
         TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         surface = nil
+        lastAppliedFocusState = nil
         ghostty_surface_free(surfaceToFree)
         callbackContext?.release()
     }
@@ -4344,6 +4384,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             TerminalSurfaceRegistry.shared.unregisterRuntimeSurface(surfaceToFree, ownerId: id)
         }
         surface = nil
+        lastAppliedFocusState = nil
 
         guard let surfaceToFree else {
 #if DEBUG
@@ -4536,6 +4577,17 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
     private var hasUsableFocusGeometry: Bool {
         bounds.width > 1 && bounds.height > 1
+    }
+
+    fileprivate var canRecoverFirstResponder: Bool {
+        guard let window, window.isKeyWindow else { return false }
+        return visibleInUI && hasUsableFocusGeometry && !isHiddenOrHasHiddenAncestor
+    }
+
+    fileprivate var canApplyFocusedSurfaceState: Bool {
+        guard canRecoverFirstResponder,
+              let firstResponder = window?.firstResponder as? NSView else { return false }
+        return firstResponder === self || firstResponder.isDescendant(of: self)
     }
 
     static func shouldRequestFirstResponderForMouseFocus(
@@ -5472,7 +5524,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             // allowed a mismatch where AppKit focus moved but the UI focus indicator (bonsplit)
             // stayed behind.
             let hiddenInHierarchy = isHiddenOrHasHiddenAncestor
-            if isVisibleInUI && hasUsableFocusGeometry && !hiddenInHierarchy {
+            if canRecoverFirstResponder && canApplyFocusedSurfaceState {
                 shouldApplySurfaceFocus = true
                 onFocus?()
             } else if isVisibleInUI && (!hasUsableFocusGeometry || hiddenInHierarchy) {
@@ -5482,9 +5534,16 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
                     "frame=\(String(format: "%.1fx%.1f", bounds.width, bounds.height)) hidden=\(hiddenInHierarchy ? 1 : 0)"
                 )
 #endif
+            } else if isVisibleInUI {
+#if DEBUG
+                dlog(
+                    "focus.firstResponder SUPPRESSED (not_focus_owner) surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil") " +
+                    "keyWindow=\(window?.isKeyWindow == true ? 1 : 0)"
+                )
+#endif
             }
         }
-        if result, shouldApplySurfaceFocus, let surface = ensureSurfaceReadyForInput() {
+        if result, shouldApplySurfaceFocus, ensureSurfaceReadyForInput() != nil {
             let now = CACurrentMediaTime()
             let deltaMs = (now - lastScrollEventTime) * 1000
             Self.focusLog("becomeFirstResponder: surface=\(terminalSurface?.id.uuidString ?? "nil") deltaSinceScrollMs=\(String(format: "%.2f", deltaMs))")
@@ -5507,15 +5566,16 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
                     ]
                 )
             }
-            terminalSurface?.recordExternalFocusState(true)
-            ghostty_surface_set_focus(surface, true)
+            terminalSurface?.setFocus(true)
 
             // Ghostty only restarts its vsync display link on display-id changes while focused.
             // During rapid split close / SwiftUI reparenting, the view can reattach to a window
             // and get its display id set *before* it becomes first responder; in that case, the
             // renderer can remain stuck until some later screen/focus transition. Reassert the
             // display id now that we're focused to ensure the renderer is running.
-            if let displayID = window?.screen?.displayID, displayID != 0 {
+            if let surface = terminalSurface?.liveSurfaceForGhosttyAccess(reason: "focus.firstResponder"),
+               let displayID = window?.screen?.displayID,
+               displayID != 0 {
                 ghostty_surface_set_display_id(surface, displayID)
             }
         }
@@ -5526,13 +5586,12 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         let result = super.resignFirstResponder()
         if result {
             desiredFocus = false
-            terminalSurface?.recordExternalFocusState(false)
+            terminalSurface?.setFocus(false)
         }
-        if result, let surface = surface {
+        if result, surface != nil {
             let now = CACurrentMediaTime()
             let deltaMs = (now - lastScrollEventTime) * 1000
             Self.focusLog("resignFirstResponder: surface=\(terminalSurface?.id.uuidString ?? "nil") deltaSinceScrollMs=\(String(format: "%.2f", deltaMs))")
-            ghostty_surface_set_focus(surface, false)
         }
         return result
     }
@@ -5820,8 +5879,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // This avoids intermittent drops after rapid split close/reparent transitions.
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.control) && !flags.contains(.command) && !flags.contains(.option) && !hasMarkedText() {
-            terminalSurface?.recordExternalFocusState(true)
-            ghostty_surface_set_focus(surface, true)
+            terminalSurface?.setFocus(true)
+            guard let surface = terminalSurface?.liveSurfaceForGhosttyAccess(reason: "keyDown.ctrlFastPath") else {
+                requestInputRecoveryAfterSurfaceMiss(reason: "keyDown.ctrlFastPathSurfaceMiss")
+                return
+            }
             var keyEvent = ghostty_input_key_s()
             keyEvent.action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
             keyEvent.keycode = UInt32(event.keyCode)
@@ -7482,7 +7544,7 @@ final class GhosttySurfaceScrollView: NSView {
         imageTransferCancelButton = NSButton(frame: .zero)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = false
+        scrollView.autohidesScrollers = true
         scrollView.usesPredominantAxisScrolling = true
         scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
@@ -7513,10 +7575,11 @@ final class GhosttySurfaceScrollView: NSView {
         inactiveOverlayView.isHidden = true
         addSubview(inactiveOverlayView)
         dropZoneOverlayView.wantsLayer = true
-        dropZoneOverlayView.layer?.backgroundColor = cmuxAccentNSColor().withAlphaComponent(0.25).cgColor
-        dropZoneOverlayView.layer?.borderColor = cmuxAccentNSColor().cgColor
+        let ernestGreen = NSColor(srgbRed: 26.0 / 255.0, green: 71.0 / 255.0, blue: 49.0 / 255.0, alpha: 1.0)
+        dropZoneOverlayView.layer?.backgroundColor = ernestGreen.withAlphaComponent(0.12).cgColor
+        dropZoneOverlayView.layer?.borderColor = ernestGreen.withAlphaComponent(0.5).cgColor
         dropZoneOverlayView.layer?.borderWidth = 2
-        dropZoneOverlayView.layer?.cornerRadius = 8
+        dropZoneOverlayView.layer?.cornerRadius = 18
         dropZoneOverlayView.isHidden = true
         notificationRingOverlayView.wantsLayer = true
         notificationRingOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -8657,14 +8720,12 @@ final class GhosttySurfaceScrollView: NSView {
             surfaceView.terminalSurface?.setOcclusion(visible)
         }
 #if DEBUG
-        if wasVisible != visible {
-            let transition = "\(wasVisible ? 1 : 0)->\(visible ? 1 : 0)"
-            let suffix = debugVisibilityStateSuffix(transition: transition)
-            debugLogWorkspaceSwitchTiming(
-                event: "ws.term.visible",
-                suffix: suffix
-            )
-        }
+        let transition = "\(wasVisible ? 1 : 0)->\(visible ? 1 : 0)"
+        let suffix = debugVisibilityStateSuffix(transition: transition)
+        debugLogWorkspaceSwitchTiming(
+            event: "ws.term.visible",
+            suffix: suffix
+        )
 #endif
         if wasVisible != visible {
             NotificationCenter.default.post(
@@ -8676,13 +8737,15 @@ final class GhosttySurfaceScrollView: NSView {
                 ]
             )
         }
-        if !visible {
+        if !visible, wasVisible != visible {
+            surfaceView.desiredFocus = false
+            surfaceView.terminalSurface?.setFocus(false)
             // If we were focused, yield first responder.
             if let window, let fr = window.firstResponder as? NSView,
                fr === surfaceView || fr.isDescendant(of: surfaceView) {
                 window.makeFirstResponder(nil)
             }
-        } else {
+        } else if isActive {
             scheduleAutomaticFirstResponderApply(reason: "setVisibleInUI")
         }
     }
@@ -8714,8 +8777,12 @@ final class GhosttySurfaceScrollView: NSView {
         }
 #endif
         if active {
-            scheduleAutomaticFirstResponderApply(reason: "setActive")
-        } else {
+            if surfaceView.isVisibleInUI {
+                scheduleAutomaticFirstResponderApply(reason: "setActive")
+            }
+        } else if wasActive != active {
+            surfaceView.desiredFocus = false
+            surfaceView.terminalSurface?.setFocus(false)
             resignOwnedFirstResponderIfNeeded(reason: "setActive(false)")
         }
     }
@@ -9097,6 +9164,7 @@ final class GhosttySurfaceScrollView: NSView {
 
     private func scheduleAutomaticFirstResponderApply(reason: String) {
         guard !pendingAutomaticFirstResponderApply else { return }
+        guard isActive, surfaceView.isVisibleInUI, window != nil else { return }
         pendingAutomaticFirstResponderApply = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -9110,6 +9178,13 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     private func reassertTerminalSurfaceFocus(reason: String) {
+        guard isActive,
+              surfaceView.isVisibleInUI,
+              !isHiddenOrHasHiddenAncestor,
+              !surfaceView.isHiddenOrHasHiddenAncestor,
+              let window,
+              window.isKeyWindow,
+              isSurfaceViewFirstResponder() else { return }
         guard let terminalSurface = surfaceView.terminalSurface else { return }
         if terminalSurface.surface == nil {
             terminalSurface.requestBackgroundSurfaceStartIfNeeded()
@@ -9172,9 +9247,14 @@ final class GhosttySurfaceScrollView: NSView {
             restoreSearchFocus(window: window)
             return
         }
-        if let fr = window.firstResponder as? NSView,
-           fr === surfaceView || fr.isDescendant(of: surfaceView) {
-            reassertTerminalSurfaceFocus(reason: "applyFirstResponder.alreadyFirstResponder")
+        if isSurfaceViewFirstResponder() {
+            if let terminalSurface = surfaceView.terminalSurface {
+                if terminalSurface.surface == nil {
+                    reassertTerminalSurfaceFocus(reason: "applyFirstResponder.alreadyFirstResponder")
+                } else {
+                    terminalSurface.setFocus(true)
+                }
+            }
             return
         }
         // Don't steal focus from a search overlay on another surface in this window.
@@ -10598,6 +10678,24 @@ struct GhosttyTerminalView: NSViewRepresentable {
         // SwiftUI can transiently dismantle/rebuild NSViewRepresentable instances during split
         // tree updates. Do not drop the portal lease or force visible/active false here; that
         // causes avoidable blackouts when the same hosted view is rebound moments later.
+        // However, schedule a deferred auto-hide so stale portals cannot persist indefinitely
+        // if no re-bind arrives within a few frames.
+        if let hostedView {
+            let dismantleGeneration = coordinator.attachGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak hostedView, weak coordinator] in
+                guard let hostedView, let coordinator else { return }
+                // If no new bind arrived (attachGeneration unchanged), hide the stale portal.
+                guard coordinator.attachGeneration == dismantleGeneration else { return }
+#if DEBUG
+                dlog("portal.dismantle.autoHide surface=\(hostedView.debugSurfaceId?.uuidString.prefix(5) ?? "nil")")
+#endif
+                hostedView.isHidden = true
+                TerminalWindowPortalRegistry.updateEntryVisibility(
+                    for: hostedView,
+                    visibleInUI: false
+                )
+            }
+        }
         hostedView?.setFocusHandler(nil)
         hostedView?.setTriggerFlashHandler(nil)
         hostedView?.setDropZoneOverlay(zone: nil)

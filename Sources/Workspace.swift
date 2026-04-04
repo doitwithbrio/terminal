@@ -294,6 +294,13 @@ extension Workspace {
     }
 
     func restoreSessionSnapshot(_ snapshot: SessionWorkspaceSnapshot) {
+#if DEBUG
+        // Session restore should only run against workspaces created with createInitialTerminal: false.
+        // If panels already exist, some startup path created terminals before restore, which will
+        // produce duplicate output.
+        assert(panels.isEmpty,
+            "restoreSessionSnapshot called on workspace with \(panels.count) existing panels — likely duplicate terminal creation")
+#endif
         restoredTerminalScrollbackByPanelId.removeAll(keepingCapacity: false)
 
         let normalizedCurrentDirectory = snapshot.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5731,7 +5738,7 @@ final class Workspace: Identifiable, ObservableObject {
     ) -> BonsplitConfiguration.Appearance.ChromeColors {
         .init(
             backgroundHex: DesignSystem.Color.panelSurface.hexString(),
-            borderHex: DesignSystem.Color.panelBorder.hexString()
+            borderHex: DesignSystem.Color.panelBorder.hexString(includeAlpha: true)
         )
     }
 
@@ -5745,11 +5752,12 @@ final class Workspace: Identifiable, ObservableObject {
             topShelfInsetTop: DesignSystem.Metrics.sidebarInset,
             topShelfInsetLeading: DesignSystem.Metrics.sidebarInset,
             topShelfInsetTrailing: DesignSystem.Metrics.sidebarInset,
+            showRootTabBar: false,
             splitButtonTooltips: Self.currentSplitButtonTooltips(),
             enableAnimations: false,
             chromeColors: .init(
                 backgroundHex: DesignSystem.Color.panelSurface.hexString(),
-                borderHex: DesignSystem.Color.panelBorder.hexString()
+                borderHex: DesignSystem.Color.panelBorder.hexString(includeAlpha: true)
             )
         )
     }
@@ -5778,7 +5786,7 @@ final class Workspace: Identifiable, ObservableObject {
             return
         }
         bonsplitController.configuration.appearance.chromeColors.backgroundHex = nextHex
-        bonsplitController.configuration.appearance.chromeColors.borderHex = DesignSystem.Color.panelBorder.hexString()
+        bonsplitController.configuration.appearance.chromeColors.borderHex = DesignSystem.Color.panelBorder.hexString(includeAlpha: true)
         if GhosttyApp.shared.backgroundLogEnabled {
             GhosttyApp.shared.logBackground(
                 "theme applied workspace=\(id.uuidString) reason=\(reason) resultingBg=\(bonsplitController.configuration.appearance.chromeColors.backgroundHex ?? "nil")"
@@ -5792,7 +5800,8 @@ final class Workspace: Identifiable, ObservableObject {
         portOrdinal: Int = 0,
         configTemplate: CmuxSurfaceConfigTemplate? = nil,
         initialTerminalCommand: String? = nil,
-        initialTerminalEnvironment: [String: String] = [:]
+        initialTerminalEnvironment: [String: String] = [:],
+        createInitialTerminal: Bool = true
     ) {
         self.id = UUID()
         self.portOrdinal = portOrdinal
@@ -5831,32 +5840,34 @@ final class Workspace: Identifiable, ObservableObject {
         // Remove the default "Welcome" tab that bonsplit creates
         let welcomeTabIds = bonsplitController.allTabIds
 
-        // Create initial terminal panel
-        let terminalPanel = TerminalPanel(
-            workspaceId: id,
-            context: GHOSTTY_SURFACE_CONTEXT_TAB,
-            configTemplate: configTemplate,
-            workingDirectory: hasWorkingDirectory ? trimmedWorkingDirectory : nil,
-            portOrdinal: portOrdinal,
-            initialCommand: initialTerminalCommand,
-            initialEnvironmentOverrides: initialTerminalEnvironment
-        )
-        configureTerminalPanel(terminalPanel)
-        panels[terminalPanel.id] = terminalPanel
-        panelTitles[terminalPanel.id] = terminalPanel.displayTitle
-        seedTerminalInheritanceFontPoints(panelId: terminalPanel.id, configTemplate: configTemplate)
-
-        // Create initial tab in bonsplit and store the mapping
         var initialTabId: TabID?
-        if let tabId = bonsplitController.createTab(
-            title: title,
-            icon: "terminal.fill",
-            kind: SurfaceKind.terminal,
-            isDirty: false,
-            isPinned: false
-        ) {
-            surfaceIdToPanelId[tabId] = terminalPanel.id
-            initialTabId = tabId
+        if createInitialTerminal {
+            // Create initial terminal panel
+            let terminalPanel = TerminalPanel(
+                workspaceId: id,
+                context: GHOSTTY_SURFACE_CONTEXT_TAB,
+                configTemplate: configTemplate,
+                workingDirectory: hasWorkingDirectory ? trimmedWorkingDirectory : nil,
+                portOrdinal: portOrdinal,
+                initialCommand: initialTerminalCommand,
+                initialEnvironmentOverrides: initialTerminalEnvironment
+            )
+            configureTerminalPanel(terminalPanel)
+            panels[terminalPanel.id] = terminalPanel
+            panelTitles[terminalPanel.id] = terminalPanel.displayTitle
+            seedTerminalInheritanceFontPoints(panelId: terminalPanel.id, configTemplate: configTemplate)
+
+            // Create initial tab in bonsplit and store the mapping
+            if let tabId = bonsplitController.createTab(
+                title: title,
+                icon: "terminal.fill",
+                kind: SurfaceKind.terminal,
+                isDirty: false,
+                isPinned: false
+            ) {
+                surfaceIdToPanelId[tabId] = terminalPanel.id
+                initialTabId = tabId
+            }
         }
 
         // Close the default Welcome tab(s)
@@ -7710,7 +7721,6 @@ final class Workspace: Identifiable, ObservableObject {
         if shouldFocusNewTab {
             bonsplitController.focusPane(paneId)
             bonsplitController.selectTab(newTabId)
-            newPanel.focus()
             applyTabSelection(tabId: newTabId, inPane: paneId)
         } else {
             preserveFocusAfterNonFocusSplit(
@@ -8572,7 +8582,6 @@ final class Workspace: Identifiable, ObservableObject {
         if focus {
             bonsplitController.focusPane(paneId)
             bonsplitController.selectTab(newTabId)
-            detached.panel.focus()
             applyTabSelection(tabId: newTabId, inPane: paneId)
         } else {
             scheduleFocusReconcile()
@@ -9073,9 +9082,12 @@ final class Workspace: Identifiable, ObservableObject {
             panel.unfocus()
         }
 
-        targetPanel.focus()
         if let terminalPanel = targetPanel as? TerminalPanel {
+            terminalPanel.hostedView.setActive(true)
+            terminalPanel.surface.setFocus(true)
             terminalPanel.hostedView.ensureFocus(for: id, surfaceId: targetPanelId)
+        } else {
+            targetPanel.focus()
         }
         if let dir = panelDirectories[targetPanelId] {
             currentDirectory = dir
@@ -10188,7 +10200,7 @@ extension Workspace: BonsplitDelegate {
             terminalPanel.surface.setFocus(shouldFocusTerminalSurface)
             terminalPanel.hostedView.setActive(true)
             if reassertAppKitFocus && shouldFocusTerminalSurface {
-                terminalPanel.focus()
+                terminalPanel.hostedView.ensureFocus(for: id, surfaceId: terminalPanel.id)
             }
             return
         }
@@ -10533,6 +10545,13 @@ extension Workspace: BonsplitDelegate {
         if !isDetaching {
             scheduleFocusReconcile()
         }
+
+        // When closing a tab auto-closes an empty pane (returning to single-pane),
+        // didClosePane is NOT fired by Bonsplit. Ensure showRootTabBar is reset here
+        // so the app-owned root shelf is the sole tab bar (prevents double tab bar).
+        if bonsplitController.allPaneIds.count <= 1 {
+            bonsplitController.configuration.appearance.showRootTabBar = false
+        }
     }
 
     func splitTabBar(_ controller: BonsplitController, didSelectTab tab: Bonsplit.Tab, inPane pane: PaneID) {
@@ -10590,6 +10609,12 @@ extension Workspace: BonsplitDelegate {
         scheduleTerminalGeometryReconcile()
         if !isDetachingCloseTransaction {
             scheduleFocusReconcile()
+        }
+
+        // When moving a tab auto-closes an empty source pane (returning to single-pane),
+        // didClosePane is NOT fired by Bonsplit. Ensure showRootTabBar is reset here.
+        if bonsplitController.allPaneIds.count <= 1 {
+            bonsplitController.configuration.appearance.showRootTabBar = false
         }
     }
 
@@ -10652,6 +10677,13 @@ extension Workspace: BonsplitDelegate {
         if shouldScheduleFocusReconcile {
             scheduleFocusReconcile()
         }
+
+        // When back to a single unsplit pane, disable Bonsplit's root tab bar
+        // so the app shell can own the root top-shelf container positioning.
+        let isSinglePane = bonsplitController.allPaneIds.count <= 1
+        if isSinglePane {
+            bonsplitController.configuration.appearance.showRootTabBar = false
+        }
     }
 
     func splitTabBar(_ controller: BonsplitController, shouldClosePane pane: PaneID) -> Bool {
@@ -10671,6 +10703,9 @@ extension Workspace: BonsplitDelegate {
     }
 
     func splitTabBar(_ controller: BonsplitController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation) {
+        // When split, Bonsplit owns per-pane tab bars via isNestedInSplit.
+        // Enable showRootTabBar so tab bars appear in all cases.
+        bonsplitController.configuration.appearance.showRootTabBar = true
 #if DEBUG
         let panelKindForTab: (TabID) -> String = { tabId in
             guard let panelId = self.panelIdFromSurfaceId(tabId),

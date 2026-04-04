@@ -8,6 +8,20 @@ import XCTest
 
 @MainActor
 final class TabManagerSessionSnapshotTests: XCTestCase {
+    func testInitWithoutInitialWorkspaceStartsEmptyUntilRestore() {
+        let manager = TabManager(createInitialWorkspace: false)
+
+        XCTAssertTrue(manager.tabs.isEmpty)
+        XCTAssertNil(manager.selectedTabId)
+    }
+
+    func testWorkspaceCanSkipInitialTerminalDuringRestoreConstruction() {
+        let workspace = Workspace(createInitialTerminal: false)
+
+        XCTAssertTrue(workspace.panels.isEmpty)
+        XCTAssertTrue(workspace.bonsplitController.allTabIds.isEmpty)
+    }
+
     func testSessionSnapshotSerializesWorkspacesAndRestoreRebuildsSelection() {
         let manager = TabManager()
         guard let firstWorkspace = manager.selectedWorkspace else {
@@ -32,6 +46,26 @@ final class TabManagerSessionSnapshotTests: XCTestCase {
         XCTAssertEqual(restored.selectedTabId, restored.tabs[1].id)
         XCTAssertEqual(restored.tabs[0].customTitle, "First")
         XCTAssertEqual(restored.tabs[1].customTitle, "Second")
+    }
+
+    func testRestoreSessionSnapshotIntoEmptyManagerDoesNotAddBootstrapWorkspace() {
+        let manager = TabManager()
+        let secondWorkspace = manager.addWorkspace(select: true)
+        manager.tabs.first?.setCustomTitle("First")
+        secondWorkspace.setCustomTitle("Second")
+
+        let snapshot = manager.sessionSnapshot(includeScrollback: false)
+        let restored = TabManager(createInitialWorkspace: false)
+        restored.restoreSessionSnapshot(snapshot)
+
+        XCTAssertEqual(restored.tabs.count, 2)
+        XCTAssertEqual(restored.tabs[0].customTitle, "First")
+        XCTAssertEqual(restored.tabs[1].customTitle, "Second")
+        XCTAssertEqual(restored.selectedTabId, restored.tabs[1].id)
+        XCTAssertEqual(restored.tabs[0].panels.count, 1)
+        XCTAssertEqual(restored.tabs[1].panels.count, 1)
+        XCTAssertEqual(restored.tabs[0].bonsplitController.allTabIds.count, 1)
+        XCTAssertEqual(restored.tabs[1].bonsplitController.allTabIds.count, 1)
     }
 
     func testRestoreSessionSnapshotWithNoWorkspacesKeepsSingleFallbackWorkspace() {

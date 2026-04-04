@@ -1180,6 +1180,71 @@ final class WindowTerminalPortal: NSObject {
             if hostedId == hostedIdToSkip { continue }
             synchronizeHostedView(withId: hostedId)
         }
+        hideOverlappingLowerPriorityPortals()
+    }
+
+    /// After individual synchronization, detect any visible portals that overlap
+    /// significantly and force-hide the lower-z-priority one. This is the structural
+    /// guarantee that at most one terminal is visible per pane region, regardless of
+    /// how many portal entries exist due to SwiftUI lifecycle churn.
+    private func hideOverlappingLowerPriorityPortals() {
+        struct VisibleEntry {
+            let hostedId: ObjectIdentifier
+            let hostedView: GhosttySurfaceScrollView
+            let frame: NSRect
+            let zPriority: Int
+        }
+
+        var visibleEntries: [VisibleEntry] = []
+        for (hostedId, entry) in entriesByHostedId {
+            guard let hostedView = entry.hostedView,
+                  !hostedView.isHidden,
+                  entry.visibleInUI else { continue }
+            let frame = hostedView.frame
+            guard frame.width > 1, frame.height > 1 else { continue }
+            visibleEntries.append(VisibleEntry(
+                hostedId: hostedId,
+                hostedView: hostedView,
+                frame: frame,
+                zPriority: entry.zPriority
+            ))
+        }
+
+        guard visibleEntries.count > 1 else { return }
+
+        // Sort by z-priority descending so the highest-priority entry wins ties.
+        visibleEntries.sort { $0.zPriority > $1.zPriority }
+
+        var hiddenIds = Set<ObjectIdentifier>()
+        for i in 0..<visibleEntries.count {
+            guard !hiddenIds.contains(visibleEntries[i].hostedId) else { continue }
+            for j in (i + 1)..<visibleEntries.count {
+                guard !hiddenIds.contains(visibleEntries[j].hostedId) else { continue }
+                let intersection = visibleEntries[i].frame.intersection(visibleEntries[j].frame)
+                guard !intersection.isNull else { continue }
+                let overlapArea = intersection.width * intersection.height
+                let smallerArea = min(
+                    visibleEntries[i].frame.width * visibleEntries[i].frame.height,
+                    visibleEntries[j].frame.width * visibleEntries[j].frame.height
+                )
+                guard smallerArea > 0 else { continue }
+                let overlapFraction = overlapArea / smallerArea
+                if overlapFraction > 0.5 {
+                    // Hide the lower-priority entry (j, since sorted descending).
+                    let loser = visibleEntries[j]
+#if DEBUG
+                    dlog(
+                        "portal.overlap.hide hosted=\(portalDebugToken(loser.hostedView)) " +
+                        "overlapFraction=\(String(format: "%.2f", overlapFraction)) " +
+                        "winnerZ=\(visibleEntries[i].zPriority) loserZ=\(loser.zPriority) " +
+                        "frame=\(portalDebugFrame(loser.frame))"
+                    )
+#endif
+                    loser.hostedView.isHidden = true
+                    hiddenIds.insert(loser.hostedId)
+                }
+            }
+        }
     }
 
     private func resetTransientRecoveryRetryIfNeeded(forHostedId hostedId: ObjectIdentifier, entry: inout Entry) {
@@ -1405,7 +1470,8 @@ final class WindowTerminalPortal: NSObject {
             didScheduleTransientRecovery &&
             shouldHide &&
             entry.visibleInUI &&
-            !hostedView.isHidden
+            !hostedView.isHidden &&
+            !hasOtherVisibleEntryOverlapping(hostedId: hostedId, frame: hostedView.frame)
 
         let oldFrame = hostedView.frame
 #if DEBUG
@@ -1554,6 +1620,27 @@ final class WindowTerminalPortal: NSObject {
             entry.anchorView.map { ObjectIdentifier($0) }
         })
         hostedByAnchorId = hostedByAnchorId.filter { validAnchorIds.contains($0.key) }
+    }
+
+    /// Returns true if another visible portal entry overlaps the given frame by more than 50%.
+    /// Used to prevent `deferKeep` from preserving a stale portal when a replacement is already
+    /// visible in the same region.
+    private func hasOtherVisibleEntryOverlapping(hostedId: ObjectIdentifier, frame: NSRect) -> Bool {
+        guard frame.width > 1, frame.height > 1 else { return false }
+        let area = frame.width * frame.height
+        for (otherId, otherEntry) in entriesByHostedId {
+            guard otherId != hostedId else { continue }
+            guard let otherView = otherEntry.hostedView,
+                  !otherView.isHidden,
+                  otherEntry.visibleInUI else { continue }
+            let otherFrame = otherView.frame
+            guard otherFrame.width > 1, otherFrame.height > 1 else { continue }
+            let intersection = frame.intersection(otherFrame)
+            guard !intersection.isNull else { continue }
+            let overlapArea = intersection.width * intersection.height
+            if overlapArea / area > 0.5 { return true }
+        }
+        return false
     }
 
     func hostedIds() -> Set<ObjectIdentifier> {

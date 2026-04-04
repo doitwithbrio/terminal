@@ -315,6 +315,148 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertTrue(contents.hasSuffix(reset))
     }
 
+    func testScrollbackReplayEnvironmentStripsLeadingLastLoginBanners() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let source = "Last login: Thu Apr 2 17:30:14 on ttys015\nLast login: Thu Apr 2 17:40:22 on ttys016\n~\n> "
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: source,
+            tempDirectory: tempDir
+        )
+
+        guard let path = environment[SessionScrollbackReplayStore.environmentKey],
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("Expected replay file contents")
+            return
+        }
+
+        XCTAssertEqual(contents, "~\n> ")
+    }
+
+    func testScrollbackReplayEnvironmentStripsAnsiWrappedLeadingLastLoginBanners() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let reset = "\u{001B}[0m"
+        let source = "\(reset)Last login: Thu Apr 2 17:30:14 on ttys015\n~\n> "
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: source,
+            tempDirectory: tempDir
+        )
+
+        guard let path = environment[SessionScrollbackReplayStore.environmentKey],
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("Expected replay file contents")
+            return
+        }
+
+        XCTAssertEqual(contents, "~\n> ")
+    }
+
+    func testScrollbackReplayEnvironmentSkipsBannerOnlyReplay() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: "Last login: Thu Apr 2 17:30:14 on ttys015\n",
+            tempDirectory: tempDir
+        )
+
+        XCTAssertTrue(environment.isEmpty)
+    }
+
+    func testScrollbackReplayEnvironmentPreservesNonLeadingLastLoginText() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let source = "~\ncat log.txt\nLast login: preserved output\n> "
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: source,
+            tempDirectory: tempDir
+        )
+
+        guard let path = environment[SessionScrollbackReplayStore.environmentKey],
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("Expected replay file contents")
+            return
+        }
+
+        XCTAssertEqual(contents, source)
+    }
+
+    func testScrollbackReplayEnvironmentStripsNonLeadingRealLoginBannerText() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let source = "~\nLast login: Thu Apr 2 20:23:20 on ttys021\n> "
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: source,
+            tempDirectory: tempDir
+        )
+
+        guard let path = environment[SessionScrollbackReplayStore.environmentKey],
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("Expected replay file contents")
+            return
+        }
+
+        XCTAssertEqual(contents, "~\n> ")
+    }
+
+    func testScrollbackReplayEnvironmentStripsAnsiPrefixedNonLeadingRealLoginBannerText() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let reset = "\u{001B}[0m"
+        let source = "~\n\(reset)Last login: Thu Apr 2 20:23:20 on ttys021\n> "
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: source,
+            tempDirectory: tempDir
+        )
+
+        guard let path = environment[SessionScrollbackReplayStore.environmentKey],
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("Expected replay file contents")
+            return
+        }
+
+        XCTAssertEqual(contents, "~\n> ")
+    }
+
+    func testScrollbackReplayEnvironmentPreservesLeadingNonBannerLastLoginText() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-scrollback-replay-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let source = "Last login: preserved output\n> "
+        let environment = SessionScrollbackReplayStore.replayEnvironment(
+            for: source,
+            tempDirectory: tempDir
+        )
+
+        guard let path = environment[SessionScrollbackReplayStore.environmentKey],
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("Expected replay file contents")
+            return
+        }
+
+        XCTAssertEqual(contents, source)
+    }
+
     func testTruncatedScrollbackAvoidsLeadingPartialANSICSISequence() {
         let maxChars = SessionPersistencePolicy.maxScrollbackCharactersPerTerminal
         let source = "\u{001B}[31m"

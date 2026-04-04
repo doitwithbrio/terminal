@@ -135,9 +135,6 @@ final class TerminalPanel: Panel, ObservableObject {
     }
 
     func focus() {
-        surface.setFocus(true)
-        // `unfocus()` force-disables active state to stop stale retries from stealing focus.
-        // Re-enable it immediately for explicit focus requests (socket/UI) so ensureFocus can run.
         hostedView.setActive(true)
         hostedView.ensureFocus(for: workspaceId, surfaceId: id)
     }

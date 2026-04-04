@@ -86660,6 +86660,40 @@
           }
         }
       }
+    },
+    "bonsplit.editMode.done": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done Editing"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集完了"
+          }
+        }
+      }
+    },
+    "bonsplit.editMode.reorder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reorder Tabs"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タブを並べ替え"
+          }
+        }
+      }
     }
   }
 }

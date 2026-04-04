@@ -839,8 +839,10 @@ class TabManager: ObservableObject {
     private var uiTestCancellables = Set<AnyCancellable>()
 #endif
 
-    init(initialWorkingDirectory: String? = nil) {
-        addWorkspace(workingDirectory: initialWorkingDirectory)
+    init(initialWorkingDirectory: String? = nil, createInitialWorkspace: Bool = true) {
+        if createInitialWorkspace {
+            addWorkspace(workingDirectory: initialWorkingDirectory)
+        }
         observers.append(NotificationCenter.default.addObserver(
             forName: .ghosttyDidSetTitle,
             object: nil,
@@ -5584,7 +5586,8 @@ extension TabManager {
             let workspace = Workspace(
                 title: workspaceSnapshot.processTitle,
                 workingDirectory: workspaceSnapshot.currentDirectory,
-                portOrdinal: ordinal
+                portOrdinal: ordinal,
+                createInitialTerminal: false
             )
             workspace.owningTabManager = self
             workspace.restoreSessionSnapshot(workspaceSnapshot)

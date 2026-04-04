@@ -256,13 +256,13 @@ struct WorkspaceContentView: View {
 
     var body: some View {
         let appearance = PanelAppearance.fromConfig(config)
-        let isSplit = workspace.bonsplitController.allPaneIds.count > 1 ||
-            workspace.panels.count > 1
+        let isSplit = workspace.bonsplitController.allPaneIds.count > 1
         let usesWorkspacePaneOverlay = TmuxOverlayExperimentSettings.target().usesWorkspacePaneOverlay
 
         // Inactive workspaces are kept alive in a ZStack (for state preservation) but their
         // AppKit-backed views can still intercept drags. Disable drop acceptance for them.
         let _ = { workspace.bonsplitController.isInteractive = isWorkspaceInputActive }()
+        let _ = { workspace.bonsplitController.isFullScreen = isFullScreen }()
 
 
         // Wire up file drop handling so bonsplit's PaneDragContainerView can forward
@@ -377,14 +377,67 @@ struct WorkspaceContentView: View {
             )
         }
 
-        Group {
+        if isSplit {
+            // Split panes: Bonsplit owns all tab bar rendering (via isNestedInSplit)
             if isMinimalMode && !isFullScreen {
                 bonsplitView
                     .ignoresSafeArea(.container, edges: .top)
             } else {
                 bonsplitView
             }
+        } else {
+            // Unsplit root pane: app shell owns tab bar container positioning,
+            // Bonsplit provides only the tab strip content (interactions, scroll, drag/drop).
+            // This separation ensures the tab bar aligns with the sidebar wordmark
+            // without mixing window/titlebar concerns into Bonsplit's internal geometry.
+            VStack(spacing: 0) {
+                appOwnedRootShelf
+                if isMinimalMode && !isFullScreen {
+                    bonsplitView
+                        .ignoresSafeArea(.container, edges: .top)
+                } else {
+                    bonsplitView
+                }
+            }
         }
+    }
+
+    // MARK: - App-Owned Root Shelf
+
+    /// The root tab bar container, positioned by the app shell to align with the sidebar wordmark.
+    /// The tab strip content inside is still owned by Bonsplit (real tabs, drag/drop, scroll, etc.).
+    ///
+    /// Follows the sidebar header pattern: a VStack with a drag handle spacer on top
+    /// (for window dragging from empty titlebar space) and the tab strip below.
+    /// This ensures the drag handle and tab buttons never overlap, avoiding hit-test conflicts.
+    @ViewBuilder
+    private var appOwnedRootShelf: some View {
+        let trafficLightInset = workspace.bonsplitController.configuration.appearance.tabBarLeadingInset
+        let baseInset = DesignSystem.Metrics.sidebarInset  // 12pt — matches sidebarHeaderTopInset
+        let leadingInset = baseInset + (trafficLightInset > 0 ? trafficLightInset : 0)
+
+        VStack(spacing: 0) {
+            // Empty spacer with window drag handle — mirrors sidebar's sidebarHeaderTopInset area.
+            // WindowDragHandleView captures left-mouse-down in empty space for window dragging
+            // without blocking clicks on tab buttons below.
+            Color.clear
+                .frame(height: baseInset)  // 12pt — same as sidebarHeaderTopInset
+                .background(
+                    WindowDragHandleView()
+                        .background(TitlebarDoubleClickMonitorView())
+                )
+
+            // Tab strip content — fully interactive (no overlay blocking hits)
+            workspace.bonsplitController.rootTabStripContent(
+                isFocused: isWorkspaceInputActive,
+                showSplitButtons: workspace.bonsplitController.configuration.allowSplits
+            )
+            .frame(height: TabBarMetrics.tabHeight)  // 32pt tab strip height
+            .padding(.leading, leadingInset)         // 12pt base + traffic light clearance
+            .padding(.trailing, baseInset)           // 12pt trailing
+            .offset(y: -2)                           // matches sidebar's .offset(y: -2)
+        }
+        .frame(height: baseInset + TabBarMetrics.tabHeight - 2)  // 42pt total shelf height
     }
 
     private func syncBonsplitNotificationBadges() {
@@ -419,7 +472,7 @@ struct WorkspaceContentView: View {
         workspace.bonsplitController.zoomedPaneId.map { "zoom:\($0.id.uuidString)" } ?? "unzoomed"
     }
 
-    private static let tmuxWorkspacePaneTopChromeHeight: CGFloat = 30
+    private static let tmuxWorkspacePaneTopChromeHeight: CGFloat = 44
 
     private enum TmuxWorkspacePaneOverlayTrimMode {
         case workspaceLocal

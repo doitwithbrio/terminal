@@ -1,0 +1,248 @@
+{
+  "$schema": "https://opencode.ai/theme.json",
+  "defs": {
+    "sage50": "#E4ECE6",
+    "sage100": "#D7DED9",
+    "sage200": "#C7D1CB",
+    "neutral50": "#F0F0F0",
+    "paper": "#FFFFFF",
+    "borderNeutral": "#E4E4E7",
+
+    "forest": "#1A4731",
+    "forestSoft": "#2E5A44",
+
+    "ink": "#09090B",
+    "inkSoft": "#5F6B64",
+
+    "mossBg": "#14221A",
+    "mossElement": "#2A312D",
+    "mossPanel": "#242D27",
+    "mossBorder": "#2C4035",
+    "mossText": "#E8EEE9",
+    "mossMuted": "#A7B4AC",
+    "mossAccent": "#8FB39A",
+
+    "warn": "#7D6A35",
+    "warnDark": "#B9A16A",
+    "error": "#7E5757",
+    "info": "#5B6F8F",
+
+    "ochre": "#6B5230",
+    "ochreDark": "#D4B483",
+    "clay": "#7A4848",
+    "clayDark": "#D4A0A0",
+    "slate": "#4A5E7A",
+    "slateDark": "#9EB2D1",
+    "teal": "#2D6A5E",
+    "tealDark": "#7FBBB3",
+    "deepSage": "#4F614F",
+    "deepSageDark": "#A3B8A3",
+
+    "successBgLight": "#DCE8DF",
+    "successBgDark": "#223329",
+    "errorBgLight": "#EBDDDD",
+    "errorBgDark": "#3A2626"
+  },
+  "theme": {
+    "primary": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "secondary": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "accent": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "error": {
+      "light": "error",
+      "dark": "error"
+    },
+    "warning": {
+      "light": "warn",
+      "dark": "warnDark"
+    },
+    "success": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "info": {
+      "light": "info",
+      "dark": "info"
+    },
+    "text": {
+      "light": "ink",
+      "dark": "mossText"
+    },
+    "textMuted": {
+      "light": "forestSoft",
+      "dark": "mossAccent"
+    },
+    "background": {
+      "light": "paper",
+      "dark": "mossBg"
+    },
+    "backgroundPanel": {
+      "light": "paper",
+      "dark": "mossPanel"
+    },
+    "backgroundElement": {
+      "light": "sage50",
+      "dark": "mossElement"
+    },
+    "border": {
+      "light": "borderNeutral",
+      "dark": "mossBorder"
+    },
+    "borderActive": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "borderSubtle": {
+      "light": "neutral50",
+      "dark": "mossElement"
+    },
+    "diffAdded": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "diffRemoved": {
+      "light": "error",
+      "dark": "error"
+    },
+    "diffContext": {
+      "light": "inkSoft",
+      "dark": "mossMuted"
+    },
+    "diffHunkHeader": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "diffHighlightAdded": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "diffHighlightRemoved": {
+      "light": "error",
+      "dark": "error"
+    },
+    "diffAddedBg": {
+      "light": "successBgLight",
+      "dark": "successBgDark"
+    },
+    "diffRemovedBg": {
+      "light": "errorBgLight",
+      "dark": "errorBgDark"
+    },
+    "diffContextBg": {
+      "light": "paper",
+      "dark": "mossPanel"
+    },
+    "diffLineNumber": {
+      "light": "inkSoft",
+      "dark": "mossMuted"
+    },
+    "diffAddedLineNumberBg": {
+      "light": "successBgLight",
+      "dark": "successBgDark"
+    },
+    "diffRemovedLineNumberBg": {
+      "light": "errorBgLight",
+      "dark": "errorBgDark"
+    },
+    "markdownText": {
+      "light": "ink",
+      "dark": "mossText"
+    },
+    "markdownHeading": {
+      "light": "forestSoft",
+      "dark": "sage200"
+    },
+    "markdownLink": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "markdownLinkText": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "markdownCode": {
+      "light": "forestSoft",
+      "dark": "sage200"
+    },
+    "markdownBlockQuote": {
+      "light": "inkSoft",
+      "dark": "mossMuted"
+    },
+    "markdownEmph": {
+      "light": "warn",
+      "dark": "warnDark"
+    },
+    "markdownStrong": {
+      "light": "forestSoft",
+      "dark": "sage200"
+    },
+    "markdownHorizontalRule": {
+      "light": "sage100",
+      "dark": "mossBorder"
+    },
+    "markdownListItem": {
+      "light": "inkSoft",
+      "dark": "mossMuted"
+    },
+    "markdownListEnumeration": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "markdownImage": {
+      "light": "forest",
+      "dark": "sage200"
+    },
+    "markdownImageText": {
+      "light": "forest",
+      "dark": "sage200"
+    },
+    "markdownCodeBlock": {
+      "light": "ink",
+      "dark": "mossText"
+    },
+    "syntaxComment": {
+      "light": "inkSoft",
+      "dark": "mossMuted"
+    },
+    "syntaxKeyword": {
+      "light": "teal",
+      "dark": "tealDark"
+    },
+    "syntaxFunction": {
+      "light": "forest",
+      "dark": "mossAccent"
+    },
+    "syntaxVariable": {
+      "light": "ink",
+      "dark": "mossText"
+    },
+    "syntaxString": {
+      "light": "ochre",
+      "dark": "ochreDark"
+    },
+    "syntaxNumber": {
+      "light": "clay",
+      "dark": "clayDark"
+    },
+    "syntaxType": {
+      "light": "slate",
+      "dark": "slateDark"
+    },
+    "syntaxOperator": {
+      "light": "deepSage",
+      "dark": "deepSageDark"
+    },
+    "syntaxPunctuation": {
+      "light": "inkSoft",
+      "dark": "mossMuted"
+    }
+  }
+}

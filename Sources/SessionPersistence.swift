@@ -430,6 +430,7 @@ enum SessionScrollbackReplayStore {
     private static let directoryName = "cmux-session-scrollback"
     private static let ansiEscape = "\u{001B}"
     private static let ansiReset = "\u{001B}[0m"
+    private static let loginBannerPattern = /^Last login:\s.+\son\s(?:tty\S*|console)\s*$/
 
     static func replayEnvironment(
         for scrollback: String?,
@@ -449,7 +450,55 @@ enum SessionScrollbackReplayStore {
         guard let scrollback else { return nil }
         guard scrollback.contains(where: { !$0.isWhitespace }) else { return nil }
         guard let truncated = SessionPersistencePolicy.truncatedScrollback(scrollback) else { return nil }
-        return ansiSafeReplayText(truncated)
+        let filtered = removingLoginBanners(from: truncated)
+        guard filtered.contains(where: { !$0.isWhitespace }) else { return nil }
+        return ansiSafeReplayText(filtered)
+    }
+
+    private static func removingLoginBanners(from text: String) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard !lines.isEmpty else { return text }
+
+        let filteredLines = lines.filter { line in
+            !isLoginBannerLine(String(line))
+        }
+        guard filteredLines.count != lines.count else { return text }
+        return filteredLines.joined(separator: "\n")
+    }
+
+    private static func isLoginBannerLine(_ line: String) -> Bool {
+        let normalized = strippingLeadingANSIEscapes(from: line)
+        return normalized.wholeMatch(of: loginBannerPattern) != nil
+    }
+
+    private static func strippingLeadingANSIEscapes(from line: String) -> String {
+        var index = line.startIndex
+
+        while index < line.endIndex, line[index] == Character(ansiEscape) {
+            let next = line.index(after: index)
+            guard next < line.endIndex, line[next] == "[" else { break }
+
+            var cursor = line.index(after: next)
+            var foundFinalByte = false
+            while cursor < line.endIndex {
+                guard let scalar = line[cursor].unicodeScalars.first?.value else {
+                    cursor = line.index(after: cursor)
+                    continue
+                }
+                if scalar >= 0x40, scalar <= 0x7E {
+                    index = line.index(after: cursor)
+                    foundFinalByte = true
+                    break
+                }
+                cursor = line.index(after: cursor)
+            }
+
+            if !foundFinalByte {
+                break
+            }
+        }
+
+        return String(line[index...])
     }
 
     /// Preserve ANSI color state safely across replay boundaries.
