@@ -3041,10 +3041,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private var surfaceCallbackContext: Unmanaged<GhosttySurfaceCallbackContext>?
     /// The desired focus state for the Ghostty C surface. May be set before the
     /// C surface exists (e.g. during layout restoration); `createSurface` syncs
-    /// it on creation.
-    /// Initialized to `false` so newly created runtime surfaces do not eagerly
-    /// trigger focus-sensitive prompt redraws before AppKit focus converges.
-    private var desiredFocusState: Bool = false
+    /// it on creation. Also used as a dedup guard to avoid redundant
+    /// `ghostty_surface_set_focus` calls (prevents prompt redraws with P10k).
+    /// Initialized to `true` to match Ghostty's default (Terminal.zig focused=true).
+    private var desiredFocusState: Bool = true
     /// Tracks the focus state last applied to the live C surface so AppKit focus
     /// churn can avoid replaying redundant focus transitions.
     private var lastAppliedFocusState: Bool?
@@ -3139,6 +3139,13 @@ final class TerminalSurface: Identifiable, ObservableObject {
         tabId = newTabId
         attachedView?.tabId = newTabId
         surfaceView.tabId = newTabId
+    }
+
+    func mergeAdditionalEnvironment(_ overrides: [String: String]) {
+        additionalEnvironment = Self.mergedNormalizedEnvironment(
+            base: additionalEnvironment,
+            overrides: overrides
+        )
     }
 
     private static func mergedNormalizedEnvironment(
@@ -3622,6 +3629,19 @@ final class TerminalSurface: Identifiable, ObservableObject {
 #endif
                 return
             }
+            // Defer surface creation for non-visible tabs. Bonsplit's keepAllAlive
+            // mode creates views for all tabs, but only the selected tab should
+            // fork a real shell. The surface will be created when the tab is first
+            // selected and setVisibleInUI(true) is called.
+            guard view.isVisibleInUI else {
+#if DEBUG
+                dlog(
+                    "surface.attach.defer surface=\(id.uuidString.prefix(5)) reason=notVisibleInUI " +
+                    "bounds=\(String(format: "%.1fx%.1f", view.bounds.width, view.bounds.height))"
+                )
+#endif
+                return
+            }
 #if DEBUG
             dlog("surface.attach.create surface=\(id.uuidString.prefix(5))")
 #endif
@@ -3961,18 +3981,13 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
         flushPendingTextIfNeeded()
 
-        // Kick an initial draw for surfaces that are not already the active first
-        // responder (including descendant responders). Focused fresh tabs will get
-        // a reveal during first-responder/display-id convergence, and forcing an
-        // extra refresh here can duplicate prompt-side redraws.
-        let responderOwnsTerminalFocus = {
-            guard let firstResponder = view.window?.firstResponder as? NSView else { return false }
-            return firstResponder === view || firstResponder.isDescendant(of: view)
-        }()
-        if !responderOwnsTerminalFocus {
-            view.forceRefreshSurface()
-            ghostty_surface_refresh(createdSurface)
-        }
+        // Always kick an initial draw after creation/size setup. On some startup
+        // paths Ghostty can miss the first vsync callback and sit on a blank/stale
+        // frame until another focus/visibility transition nudges the renderer.
+        // Skipping this for focused surfaces causes ghost text artifacts that
+        // persist through `clear` when becomeFirstResponder fired before creation.
+        view.forceRefreshSurface()
+        ghostty_surface_refresh(createdSurface)
 
 #if DEBUG
         let runtimeFontText = cmuxCurrentSurfaceFontSizePoints(createdSurface).map {
@@ -8747,6 +8762,15 @@ final class GhosttySurfaceScrollView: NSView {
             }
         } else if isActive {
             scheduleAutomaticFirstResponderApply(reason: "setVisibleInUI")
+        }
+
+        // If becoming visible and the terminal surface has no Ghostty surface yet,
+        // trigger creation now. This handles the lazy-creation path for tabs that
+        // were deferred because they were not the selected tab at attach time.
+        if visible, !wasVisible,
+           let terminalSurface = surfaceView.terminalSurface,
+           terminalSurface.surface == nil {
+            terminalSurface.requestBackgroundSurfaceStartIfNeeded()
         }
     }
 

@@ -226,14 +226,24 @@ sleep 0.3
 pkill -f "${APP_NAME}.app/Contents/MacOS/${BASE_APP_NAME}" || true
 sleep 0.3
 CMUXD_SRC="$PWD/cmuxd/zig-out/bin/cmuxd"
+CMUX_PERSIST_SRC="$PWD/cmux-persist/zig-out/bin/cmux-persist"
 if [[ -d "$PWD/cmuxd" ]]; then
   (cd "$PWD/cmuxd" && zig build -Doptimize=ReleaseFast)
+fi
+if [[ -d "$PWD/cmux-persist" ]]; then
+  (cd "$PWD/cmux-persist" && bash build.sh ReleaseFast)
 fi
 if [[ -x "$CMUXD_SRC" ]]; then
   BIN_DIR="$APP_PATH/Contents/Resources/bin"
   mkdir -p "$BIN_DIR"
   cp "$CMUXD_SRC" "$BIN_DIR/cmuxd"
   chmod +x "$BIN_DIR/cmuxd"
+fi
+if [[ -x "$CMUX_PERSIST_SRC" ]]; then
+  BIN_DIR="$APP_PATH/Contents/Resources/bin"
+  mkdir -p "$BIN_DIR"
+  cp "$CMUX_PERSIST_SRC" "$BIN_DIR/cmux-persist"
+  chmod +x "$BIN_DIR/cmux-persist"
 fi
 # Avoid inheriting cmux/ghostty environment variables from the terminal that
 # runs this script (often inside another cmux instance), which can cause

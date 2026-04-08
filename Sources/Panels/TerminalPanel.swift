@@ -38,6 +38,9 @@ final class TerminalPanel: Panel, ObservableObject {
     /// (hostedView.window == nil) until the user switches workspaces.
     @Published var viewReattachToken: UInt64 = 0
 
+    /// Stable session ID for cmux-persist process persistence across restarts.
+    var persistSessionId: String?
+
     var onRequestWorkspacePaneFlash: ((WorkspaceAttentionFlashReason) -> Void)?
 
     private var cancellables = Set<AnyCancellable>()
@@ -127,6 +130,10 @@ final class TerminalPanel: Panel, ObservableObject {
     func updateWorkspaceId(_ newWorkspaceId: UUID) {
         workspaceId = newWorkspaceId
         surface.updateWorkspaceId(newWorkspaceId)
+    }
+
+    func mergeAdditionalEnvironment(_ overrides: [String: String]) {
+        surface.mergeAdditionalEnvironment(overrides)
     }
 
     func updateTmuxLayoutReport(_ report: TmuxPaneLayoutReport?) {

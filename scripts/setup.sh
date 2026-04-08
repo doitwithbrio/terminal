@@ -55,13 +55,32 @@ else
     if [ -d "$LOCAL_XCFRAMEWORK" ] && [ "$LOCAL_SHA" = "$GHOSTTY_SHA" ]; then
         echo "==> Seeding cache from existing local GhosttyKit.xcframework (SHA matches)"
     else
-        echo "==> Building GhosttyKit.xcframework (this may take a few minutes)..."
-        (
-            cd ghostty
-            zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
-        )
-        # Stamp the build output with the SHA it was built from
-        echo "$GHOSTTY_SHA" > "$LOCAL_SHA_STAMP"
+        # Try downloading pre-built xcframework from CI releases first (much faster).
+        RELEASE_TAG="xcframework-${GHOSTTY_SHA}"
+        DOWNLOAD_URL="https://github.com/manaflow-ai/ghostty/releases/download/${RELEASE_TAG}/GhosttyKit.xcframework.tar.gz"
+        DOWNLOADED=false
+
+        echo "==> Trying to download pre-built GhosttyKit.xcframework..."
+        if curl -fSL --retry 2 --max-time 120 "$DOWNLOAD_URL" -o /tmp/GhosttyKit.xcframework.tar.gz 2>/dev/null; then
+            echo "==> Downloaded pre-built xcframework, extracting..."
+            rm -rf "$LOCAL_XCFRAMEWORK"
+            mkdir -p "$(dirname "$LOCAL_XCFRAMEWORK")"
+            tar xzf /tmp/GhosttyKit.xcframework.tar.gz -C ghostty/macos/
+            rm -f /tmp/GhosttyKit.xcframework.tar.gz
+            echo "$GHOSTTY_SHA" > "$LOCAL_SHA_STAMP"
+            DOWNLOADED=true
+        else
+            echo "==> Pre-built xcframework not available for $GHOSTTY_SHA, building from source..."
+        fi
+
+        if [ "$DOWNLOADED" = false ]; then
+            (
+                cd ghostty
+                zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
+            )
+            # Stamp the build output with the SHA it was built from
+            echo "$GHOSTTY_SHA" > "$LOCAL_SHA_STAMP"
+        fi
     fi
 
     if [ ! -d "$LOCAL_XCFRAMEWORK" ]; then

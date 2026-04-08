@@ -1229,8 +1229,10 @@ final class WindowTerminalPortal: NSObject {
                 )
                 guard smallerArea > 0 else { continue }
                 let overlapFraction = overlapArea / smallerArea
-                if overlapFraction > 0.5 {
+                if overlapFraction > 0.1 {
                     // Hide the lower-priority entry (j, since sorted descending).
+                    // Use a low threshold (10%) to catch partially visible ghost surfaces
+                    // at edges that cause right-side text artifacts.
                     let loser = visibleEntries[j]
 #if DEBUG
                     dlog(
@@ -1241,6 +1243,9 @@ final class WindowTerminalPortal: NSObject {
                     )
 #endif
                     loser.hostedView.isHidden = true
+                    if loser.hostedView.superview === hostView {
+                        loser.hostedView.removeFromSuperview()
+                    }
                     hiddenIds.insert(loser.hostedId)
                 }
             }
@@ -1622,9 +1627,10 @@ final class WindowTerminalPortal: NSObject {
         hostedByAnchorId = hostedByAnchorId.filter { validAnchorIds.contains($0.key) }
     }
 
-    /// Returns true if another visible portal entry overlaps the given frame by more than 50%.
+    /// Returns true if another visible portal entry overlaps the given frame by more than 10%.
     /// Used to prevent `deferKeep` from preserving a stale portal when a replacement is already
-    /// visible in the same region.
+    /// visible in the same region. Low threshold catches partially visible ghost surfaces
+    /// that cause right-edge text artifacts.
     private func hasOtherVisibleEntryOverlapping(hostedId: ObjectIdentifier, frame: NSRect) -> Bool {
         guard frame.width > 1, frame.height > 1 else { return false }
         let area = frame.width * frame.height
@@ -1638,7 +1644,7 @@ final class WindowTerminalPortal: NSObject {
             let intersection = frame.intersection(otherFrame)
             guard !intersection.isNull else { continue }
             let overlapArea = intersection.width * intersection.height
-            if overlapArea / area > 0.5 { return true }
+            if overlapArea / area > 0.1 { return true }
         }
         return false
     }

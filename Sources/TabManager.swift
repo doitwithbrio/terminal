@@ -4,6 +4,7 @@ import Foundation
 import Bonsplit
 import CoreVideo
 import Combine
+import WebKit
 
 // MARK: - Tab Type Alias for Backwards Compatibility
 // The old Tab class is replaced by Workspace
@@ -737,7 +738,10 @@ class TabManager: ObservableObject {
             let previousTabId = oldValue
             if let previousTabId,
                let previousPanelId = focusedPanelId(for: previousTabId) {
-                lastFocusedPanelByTab[previousTabId] = previousPanelId
+                if let previousTab = tabs.first(where: { $0.id == previousTabId }),
+                   previousTab.isAgentPanel(previousPanelId) {
+                    lastFocusedPanelByTab[previousTabId] = previousPanelId
+                }
             }
             if !isNavigatingHistory, let selectedTabId {
                 recordTabInHistory(selectedTabId)
@@ -961,7 +965,7 @@ class TabManager: ObservableObject {
 
     private func refreshSelectedWorkspaceGitMetadata() {
         guard let workspace = selectedWorkspace,
-              let focusedPanelId = workspace.focusedPanelId else {
+              let focusedPanelId = workspace.selectedAgentPanelId else {
             return
         }
 
@@ -2693,7 +2697,7 @@ class TabManager: ObservableObject {
 #endif
         guard let selectedId = selectedTabId,
               let tab = tabs.first(where: { $0.id == selectedId }),
-              let focusedPanelId = tab.focusedPanelId else { return }
+              let focusedPanelId = tab.selectedAgentPanelId else { return }
         closePanelWithConfirmation(tab: tab, panelId: focusedPanelId)
     }
 
@@ -2843,7 +2847,7 @@ class TabManager: ObservableObject {
 
     private func closeOtherTabsInFocusedPanePlan() -> CloseOtherTabsInFocusedPanePlan? {
         guard let workspace = selectedWorkspace else { return nil }
-        guard let paneId = workspace.bonsplitController.focusedPaneId ?? workspace.bonsplitController.allPaneIds.first else {
+        guard let paneId = workspace.preferredAgentPaneIdForUserActions() else {
             return nil
         }
 
@@ -2960,7 +2964,8 @@ class TabManager: ObservableObject {
 
     private func shouldCloseWorkspaceOnLastSurfaceShortcut(_ workspace: Workspace, panelId: UUID) -> Bool {
         LastSurfaceCloseShortcutSettings.closesWorkspace() &&
-            workspace.panels.count <= 1 &&
+            workspace.isAgentPanel(panelId) &&
+            workspace.sidebarOrderedPanelIds().count <= 1 &&
             workspace.panels[panelId] != nil
     }
 
@@ -3069,7 +3074,7 @@ class TabManager: ObservableObject {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
         guard tab.panels[surfaceId] != nil else { return }
         let keepsRemoteWorkspaceOpen =
-            tab.panels.count <= 1 && tab.shouldDemoteWorkspaceAfterChildExit(surfaceId: surfaceId)
+            tab.sidebarOrderedPanelIds().count <= 1 && tab.shouldDemoteWorkspaceAfterChildExit(surfaceId: surfaceId)
 
 #if DEBUG
         dlog(
@@ -3091,7 +3096,7 @@ class TabManager: ObservableObject {
 
         // Child-exit on the last panel should collapse the workspace, matching explicit close
         // semantics (and close the window when it was the last workspace).
-        if tab.panels.count <= 1 {
+        if tab.sidebarOrderedPanelIds().count <= 1 {
             if tabs.count <= 1 {
                 if let app = AppDelegate.shared {
                     app.notificationStore?.clearNotifications(forTabId: tabId)
@@ -3172,6 +3177,10 @@ class TabManager: ObservableObject {
     }
 
     func rememberFocusedSurface(tabId: UUID, surfaceId: UUID) {
+        guard let workspace = tabs.first(where: { $0.id == tabId }),
+              workspace.isAgentPanel(surfaceId) else {
+            return
+        }
         lastFocusedPanelByTab[tabId] = surfaceId
     }
 
@@ -3188,10 +3197,10 @@ class TabManager: ObservableObject {
 
         let panelId: UUID
         if let restoredPanelId = lastFocusedPanelByTab[selectedTabId],
-           tab.panels[restoredPanelId] != nil {
+           tab.isAgentPanel(restoredPanelId) {
             panelId = restoredPanelId
-        } else if let focusedPanelId = tab.focusedPanelId,
-                  tab.panels[focusedPanelId] != nil {
+        } else if let focusedPanelId = tab.selectedAgentPanelId,
+                  tab.isAgentPanel(focusedPanelId) {
             panelId = focusedPanelId
         } else {
             return
@@ -3403,7 +3412,7 @@ class TabManager: ObservableObject {
 
     func focusTab(_ tabId: UUID, surfaceId: UUID? = nil, suppressFlash: Bool = false) {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
-        if let surfaceId, tab.panels[surfaceId] != nil {
+        if let surfaceId, tab.isAgentPanel(surfaceId) {
             // Keep selected-surface intent stable across selectedTabId didSet async restore.
             lastFocusedPanelByTab[tabId] = surfaceId
         }
@@ -3448,7 +3457,7 @@ class TabManager: ObservableObject {
             return false
         }
         if let surfaceId, tab.panels[surfaceId] == nil {
-#if DEBUG
+            #if DEBUG
             dlog(
                 "notification.focus.fail tab=\(tabId.uuidString.prefix(5)) " +
                 "panel=\(surfaceId.uuidString.prefix(5)) reason=missingPanel"
@@ -3456,7 +3465,7 @@ class TabManager: ObservableObject {
 #endif
             return false
         }
-        let desiredPanelId = surfaceId ?? tab.focusedPanelId
+        let desiredPanelId = surfaceId ?? tab.selectedAgentPanelId
 #if DEBUG
         if let desiredPanelId {
             AppDelegate.shared?.armJumpUnreadFocusRecord(tabId: tabId, surfaceId: desiredPanelId)
@@ -3469,7 +3478,7 @@ class TabManager: ObservableObject {
         focusTab(tabId, surfaceId: desiredPanelId, suppressFlash: true)
         suppressFocusFlash = false
 
-        if let targetPanelId = desiredPanelId ?? tab.focusedPanelId,
+        if let targetPanelId = desiredPanelId ?? tab.selectedAgentPanelId,
            tab.panels[targetPanelId] != nil {
             _ = dismissNotificationOnDirectInteraction(tabId: tabId, surfaceId: targetPanelId)
         }
@@ -3665,7 +3674,7 @@ class TabManager: ObservableObject {
     func createSplit(direction: SplitDirection) -> UUID? {
         guard let selectedTabId,
               let tab = tabs.first(where: { $0.id == selectedTabId }),
-              let focusedPanelId = tab.focusedPanelId else { return nil }
+              let focusedPanelId = tab.selectedAgentPanelId else { return nil }
         return createSplit(tabId: selectedTabId, surfaceId: focusedPanelId, direction: direction)
     }
 
@@ -3684,7 +3693,7 @@ class TabManager: ObservableObject {
     func createBrowserSplit(direction: SplitDirection, url: URL? = nil) -> UUID? {
         guard let selectedTabId,
               let tab = tabs.first(where: { $0.id == selectedTabId }),
-              let focusedPanelId = tab.focusedPanelId else { return nil }
+              let focusedPanelId = tab.selectedAgentPanelId else { return nil }
         tab.clearSplitZoom()
         return newBrowserSplit(
             tabId: selectedTabId,
@@ -4031,7 +4040,9 @@ class TabManager: ObservableObject {
         url: URL? = nil,
         preferSplitRight: Bool = false,
         preferredProfileID: UUID? = nil,
-        insertAtEnd: Bool = false
+        insertAtEnd: Bool = false,
+        initialUserScripts: [WKUserScript] = [],
+        chromeless: Bool = false
     ) -> UUID? {
         guard let workspace = tabs.first(where: { $0.id == tabId }) else { return nil }
         if selectedTabId != tabId {
@@ -4045,25 +4056,30 @@ class TabManager: ObservableObject {
                    url: url,
                    focus: true,
                    insertAtEnd: insertAtEnd,
-                   preferredProfileID: preferredProfileID
+                   preferredProfileID: preferredProfileID,
+                   initialUserScripts: initialUserScripts,
+                   chromeless: chromeless
                ) {
                 rememberFocusedSurface(tabId: tabId, surfaceId: browserPanel.id)
                 return browserPanel.id
             }
 
             let splitSourcePanelId: UUID? = {
-                if let focusedPanelId = workspace.focusedPanelId,
-                   workspace.panels[focusedPanelId] != nil {
+                if let focusedPanelId = workspace.selectedAgentPanelId,
+                   workspace.isAgentPanel(focusedPanelId) {
                     return focusedPanelId
                 }
                 if let rememberedPanelId = lastFocusedPanelByTab[tabId],
-                   workspace.panels[rememberedPanelId] != nil {
+                   workspace.isAgentPanel(rememberedPanelId) {
                     return rememberedPanelId
                 }
-                if let orderedPanelId = workspace.sidebarOrderedPanelIds().first(where: { workspace.panels[$0] != nil }) {
+                if let orderedPanelId = workspace.sidebarOrderedPanelIds().first(where: { workspace.isAgentPanel($0) }) {
                     return orderedPanelId
                 }
-                return workspace.panels.keys.sorted { $0.uuidString < $1.uuidString }.first
+                return workspace.panels.keys
+                    .filter { workspace.isAgentPanel($0) }
+                    .sorted { $0.uuidString < $1.uuidString }
+                    .first
             }()
 
             if let splitSourcePanelId,
@@ -4085,7 +4101,9 @@ class TabManager: ObservableObject {
                   url: url,
                   focus: true,
                   insertAtEnd: insertAtEnd,
-                  preferredProfileID: preferredProfileID
+                  preferredProfileID: preferredProfileID,
+                  initialUserScripts: initialUserScripts,
+                  chromeless: chromeless
               ) else {
             return nil
         }
@@ -4098,7 +4116,9 @@ class TabManager: ObservableObject {
     func openBrowser(
         url: URL? = nil,
         preferredProfileID: UUID? = nil,
-        insertAtEnd: Bool = false
+        insertAtEnd: Bool = false,
+        initialUserScripts: [WKUserScript] = [],
+        chromeless: Bool = false
     ) -> UUID? {
         guard let tabId = selectedTabId else { return nil }
         return openBrowser(
@@ -4106,7 +4126,9 @@ class TabManager: ObservableObject {
             url: url,
             preferSplitRight: false,
             preferredProfileID: preferredProfileID,
-            insertAtEnd: insertAtEnd
+            insertAtEnd: insertAtEnd,
+            initialUserScripts: initialUserScripts,
+            chromeless: chromeless
         )
     }
 
@@ -5544,8 +5566,9 @@ extension TabManager {
         // Session restore replaces the bootstrap workspace objects with freshly
         // restored ones. Tear the old graph down after the atomic swap so late
         // panel/socket callbacks cannot keep mutating hidden pre-restore state.
+        // Preserve persist sessions — the restored workspaces will reattach to them.
         AppDelegate.shared?.notificationStore?.clearNotifications(forTabId: workspace.id)
-        workspace.teardownAllPanels()
+        workspace.teardownAllPanels(preservePersistSessions: true)
         workspace.teardownRemoteConnection()
         workspace.owningTabManager = nil
     }
@@ -5709,6 +5732,8 @@ extension Notification.Name {
     static let commandPaletteMoveSelection = Notification.Name("cmux.commandPaletteMoveSelection")
     static let commandPaletteRenameInputInteractionRequested = Notification.Name("cmux.commandPaletteRenameInputInteractionRequested")
     static let commandPaletteRenameInputDeleteBackwardRequested = Notification.Name("cmux.commandPaletteRenameInputDeleteBackwardRequested")
+    static let agentPickerToggleRequested = Notification.Name("cmux.agentPickerToggleRequested")
+    static let contextPagePickerToggleRequested = Notification.Name("cmux.contextPagePickerToggleRequested")
     static let feedbackComposerRequested = Notification.Name("cmux.feedbackComposerRequested")
     static let ghosttyDidSetTitle = Notification.Name("ghosttyDidSetTitle")
     static let ghosttyDidFocusTab = Notification.Name("ghosttyDidFocusTab")

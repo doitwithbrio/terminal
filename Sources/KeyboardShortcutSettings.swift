@@ -44,6 +44,8 @@ enum KeyboardShortcutSettings {
 
         // Panels
         case openBrowser
+        case openT3Code
+        case openAgentPicker
         case toggleBrowserDeveloperTools
         case showBrowserJavaScriptConsole
         case toggleReactGrab
@@ -82,6 +84,8 @@ enum KeyboardShortcutSettings {
             case .splitBrowserRight: return String(localized: "shortcut.splitBrowserRight.label", defaultValue: "Split Browser Right")
             case .splitBrowserDown: return String(localized: "shortcut.splitBrowserDown.label", defaultValue: "Split Browser Down")
             case .openBrowser: return String(localized: "shortcut.openBrowser.label", defaultValue: "Open Browser")
+            case .openT3Code: return String(localized: "shortcut.openT3Code.label", defaultValue: "Open T3 Code")
+            case .openAgentPicker: return String(localized: "shortcut.openAgentPicker.label", defaultValue: "Open Agent Picker")
             case .toggleBrowserDeveloperTools: return String(localized: "shortcut.toggleBrowserDevTools.label", defaultValue: "Toggle Browser Developer Tools")
             case .showBrowserJavaScriptConsole: return String(localized: "shortcut.showBrowserJSConsole.label", defaultValue: "Show Browser JavaScript Console")
             case .toggleReactGrab: return String(localized: "shortcut.toggleReactGrab.label", defaultValue: "Toggle React Grab")
@@ -120,6 +124,8 @@ enum KeyboardShortcutSettings {
             case .newSurface: return "shortcut.newSurface"
             case .toggleTerminalCopyMode: return "shortcut.toggleTerminalCopyMode"
             case .openBrowser: return "shortcut.openBrowser"
+            case .openT3Code: return "shortcut.openT3Code"
+            case .openAgentPicker: return "shortcut.openAgentPicker"
             case .toggleBrowserDeveloperTools: return "shortcut.toggleBrowserDeveloperTools"
             case .showBrowserJavaScriptConsole: return "shortcut.showBrowserJavaScriptConsole"
             case .toggleReactGrab: return "shortcut.toggleReactGrab"
@@ -133,7 +139,7 @@ enum KeyboardShortcutSettings {
             case .newTab:
                 return StoredShortcut(key: "n", command: true, shift: false, option: false, control: false)
             case .newWindow:
-                return StoredShortcut(key: "n", command: true, shift: true, option: false, control: false)
+                return StoredShortcut(key: "n", command: true, shift: true, option: true, control: false)
             case .closeWindow:
                 return StoredShortcut(key: "w", command: true, shift: false, option: false, control: true)
             case .openFolder:
@@ -151,9 +157,9 @@ enum KeyboardShortcutSettings {
             case .prevSidebarTab:
                 return StoredShortcut(key: "[", command: true, shift: false, option: false, control: true)
             case .renameTab:
-                return StoredShortcut(key: "r", command: true, shift: false, option: false, control: false)
-            case .renameWorkspace:
                 return StoredShortcut(key: "r", command: true, shift: true, option: false, control: false)
+            case .renameWorkspace:
+                return StoredShortcut(key: "r", command: true, shift: true, option: true, control: false)
             case .closeWorkspace:
                 return StoredShortcut(key: "w", command: true, shift: true, option: false, control: false)
             case .focusLeft:
@@ -188,6 +194,10 @@ enum KeyboardShortcutSettings {
                 return StoredShortcut(key: "1", command: true, shift: false, option: false, control: false)
             case .openBrowser:
                 return StoredShortcut(key: "l", command: true, shift: true, option: false, control: false)
+            case .openT3Code:
+                return StoredShortcut(key: "k", command: true, shift: true, option: false, control: false)
+            case .openAgentPicker:
+                return StoredShortcut(key: "n", command: true, shift: true, option: false, control: false)
             case .toggleBrowserDeveloperTools:
                 // Safari default: Show Web Inspector.
                 return StoredShortcut(key: "i", command: true, shift: false, option: true, control: false)
@@ -326,6 +336,7 @@ enum KeyboardShortcutSettings {
     static func selectWorkspaceByNumberShortcut() -> StoredShortcut { shortcut(for: .selectWorkspaceByNumber) }
 
     static func openBrowserShortcut() -> StoredShortcut { shortcut(for: .openBrowser) }
+    static func openT3CodeShortcut() -> StoredShortcut { shortcut(for: .openT3Code) }
     static func toggleBrowserDeveloperToolsShortcut() -> StoredShortcut { shortcut(for: .toggleBrowserDeveloperTools) }
     static func showBrowserJavaScriptConsoleShortcut() -> StoredShortcut { shortcut(for: .showBrowserJavaScriptConsole) }
 }

@@ -7,6 +7,8 @@ public enum PanelType: String, Codable, Sendable {
     case terminal
     case browser
     case markdown
+    case t3code
+    case context
 }
 
 public enum TerminalPanelFocusIntent: Equatable {
@@ -20,10 +22,15 @@ public enum BrowserPanelFocusIntent: Equatable {
     case findField
 }
 
+public enum T3CodePanelFocusIntent: Equatable {
+    case webView
+}
+
 public enum PanelFocusIntent: Equatable {
     case panel
     case terminal(TerminalPanelFocusIntent)
     case browser(BrowserPanelFocusIntent)
+    case t3code(T3CodePanelFocusIntent)
 }
 
 public enum WorkspaceAttentionFlashReason: String, Equatable, Sendable {

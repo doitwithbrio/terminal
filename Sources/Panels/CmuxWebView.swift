@@ -107,6 +107,10 @@ enum BrowserImageCopyPasteboardBuilder {
 /// shortcuts first by default, but allow browser content to try the Find command
 /// family before cmux falls back to its own browser find overlay.
 final class CmuxWebView: WKWebView {
+    /// When true, blocks browser-native shortcuts like Cmd+R (reload)
+    /// that should not be available in chromeless embedded panels (e.g. T3 Code).
+    var isChromeless: Bool = false
+
     // Some sites/WebKit paths report middle-click link activations as
     // WKNavigationAction.buttonNumber=4 instead of 2. Track a recent local
     // middle-click so navigation delegates can recover intent reliably.
@@ -238,6 +242,20 @@ final class CmuxWebView: WKWebView {
         }
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // Block browser-native Cmd+R and Cmd+Shift+R for chromeless panels (T3 Code).
+        // Consume the event so WebKit doesn't reload the page, and let the app's
+        // shortcut monitor handle Cmd+Shift+R as tab rename.
+        if isChromeless && event.charactersIgnoringModifiers == "r" {
+            let isCmdR = flags == .command
+            let isCmdShiftR = flags == [.command, .shift]
+            if isCmdR || isCmdShiftR {
+                // Route through the app's shortcut handler
+                _ = AppDelegate.shared?.handleBrowserSurfaceKeyEquivalent(event)
+                return true
+            }
+        }
+
         // Menu/app shortcut routing is only needed for Command equivalents
         // (New Tab, Close Tab, tab switching, split commands, etc).
         guard flags.contains(.command) else {

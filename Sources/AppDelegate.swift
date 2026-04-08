@@ -2414,6 +2414,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Ensure cmux-persist socket directory exists early
+        SessionPersistenceManager.shared.ensureSocketDirectory()
+
+        // T3 Code server starts on first ⌘⇧K with the workspace's directory.
+        // Don't start eagerly — we need the workspace folder first.
+
         let env = ProcessInfo.processInfo.environment
         let isRunningUnderXCTest = isRunningUnderXCTest(env)
         let telemetryEnabled = TelemetrySettings.enabledForCurrentLaunch
@@ -3149,6 +3155,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         startupSessionSnapshot = nil
         isApplyingStartupSessionRestore = false
         _ = saveSessionSnapshot(includeScrollback: false)
+
+        // Clean up orphaned cmux-persist sessions from previous runs
+        cleanupOrphanedPersistSessions()
+    }
+
+    /// Collect all active cmux-persist session IDs and kill any orphans.
+    private func cleanupOrphanedPersistSessions() {
+        guard SessionPersistenceManager.shared.isAvailable else { return }
+        var activeIds = Set<String>()
+        for context in mainWindowContexts.values {
+            for workspace in context.tabManager.tabs {
+                for (_, panel) in workspace.panels {
+                    if let terminalPanel = panel as? TerminalPanel,
+                       let sessionId = terminalPanel.persistSessionId {
+                        activeIds.insert(sessionId)
+                    }
+                }
+            }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            SessionPersistenceManager.shared.cleanupOrphans(activeSessionIds: activeIds)
+        }
     }
 
     private func applySessionWindowSnapshot(
@@ -4528,6 +4556,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         mainWindowContexts.values.first(where: { $0.windowId == windowId })?.tabManager
     }
 
+    func tabManager(for window: NSWindow) -> TabManager? {
+        mainWindowContexts.values.first(where: { $0.window === window })?.tabManager
+    }
+
+    /// Returns all active (tabManager, window) pairs across all main windows.
+    func allTabManagers() -> [(tabManager: TabManager, window: NSWindow?)] {
+        mainWindowContexts.values.map { ($0.tabManager, $0.window) }
+    }
+
     func windowId(for tabManager: TabManager) -> UUID? {
         mainWindowContexts.values.first(where: { $0.tabManager === tabManager })?.windowId
     }
@@ -5567,6 +5604,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return activeContext
         }
         return mainWindowContexts.values.first
+    }
+
+    private func routeFocusedPickerShortcut(event: NSEvent) {
+        guard let context = preferredMainWindowContextForShortcuts(event: event),
+              let window = context.window else {
+            return
+        }
+        if let workspace = context.tabManager.selectedWorkspace,
+           let focusedPanelId = workspace.focusedPanelId,
+           workspace.isContextPanel(focusedPanelId) {
+            NotificationCenter.default.post(name: .contextPagePickerToggleRequested, object: window)
+        } else {
+            NotificationCenter.default.post(name: .agentPickerToggleRequested, object: window)
+        }
     }
 
     private func activateMainWindowContextForShortcutEvent(_ event: NSEvent) {
@@ -9650,6 +9701,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
 
+        // When a focus-routed picker is open, only handle the toggle shortcut here.
+        // All other events pass through to the overlay's own NSEvent monitor.
+        if AgentPickerState.isVisible || ContextPagePickerState.isVisible {
+            if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .openAgentPicker)) {
+                routeFocusedPickerShortcut(event: event)
+                return true
+            }
+            // Don't consume — let the picker's own keyboard monitor handle it.
+            // Returning false exits handleCustomShortcut early, so no workspace
+            // switching or other shortcut code below runs.
+            return false
+        }
+
         if matchShortcut(
             event: event,
             shortcut: StoredShortcut(key: "q", command: true, shift: false, option: false, control: false)
@@ -9974,10 +10038,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .renameTab)) {
-            // Keep Cmd+R browser reload behavior when a browser panel is focused.
-            if tabManager?.focusedBrowserPanel != nil {
-                return false
-            }
             let targetWindow = commandPaletteTargetWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
             requestCommandPaletteRenameTab(preferredWindow: targetWindow, source: "shortcut.renameTab")
             return true
@@ -10137,6 +10197,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Open browser: Cmd+Shift+L
         if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .openBrowser)) {
             _ = openBrowserAndFocusAddressBar(insertAtEnd: true)
+            return true
+        }
+
+        // Open Agent Picker: Cmd+Shift+N
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .openAgentPicker)) {
+            routeFocusedPickerShortcut(event: event)
+            return true
+        }
+
+        // Open T3 Code: Cmd+Shift+K
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .openT3Code)) {
+            _ = openT3Code()
             return true
         }
 
@@ -10408,6 +10480,206 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         _ = focusBrowserAddressBar(panelId: panelId)
 #endif
         return panelId
+    }
+
+    @discardableResult
+    func openT3Code() -> UUID? {
+        openT3Code(threadId: nil)
+    }
+
+    /// Open a T3 Code thread. If `threadId` is nil, creates a new thread.
+    @discardableResult
+    func openT3Code(threadId: String?) -> UUID? {
+        guard let tabManager else { return nil }
+        let workspaceDir = tabManager.selectedWorkspace?.currentDirectory ?? NSHomeDirectory()
+        Self.openT3CodePanel(tabManager: tabManager, threadId: threadId, workspaceDir: workspaceDir)
+        return nil
+    }
+
+    /// Opens a T3 Code thread using the provided TabManager.
+    /// Handles both fast path (server ready) and slow path (server starting).
+    /// Can be called from both AppDelegate (Cmd+Shift+K) and ContentView (Agent Picker).
+    /// Maps panel UUIDs to T3 thread IDs for deduplication.
+    /// Entries accumulate harmlessly and are cleared on app restart.
+    private static var t3PanelThreadIds: [UUID: String] = [:]
+
+    static func openT3CodePanel(
+        tabManager: TabManager,
+        threadId: String?,
+        workspaceDir: String
+    ) {
+        T3ServerManager.shared.projectDirectory = workspaceDir
+        T3ServerManager.shared.registerPanel()
+
+#if DEBUG
+        dlog(
+            "t3open.enter threadId=\(threadId ?? "nil") " +
+            "workspaceDir=\(workspaceDir) " +
+            "projectDirectory=\(T3ServerManager.shared.projectDirectory ?? "nil") " +
+            "t3HomeDirectory=\(T3ServerManager.shared.resolvedT3HomeDirectory) " +
+            "tabCount=\(tabManager.tabs.count) dictCount=\(t3PanelThreadIds.count)"
+        )
+#endif
+
+        // If opening an existing thread, check if it's already open in a panel.
+        if let threadId {
+            for workspace in tabManager.tabs {
+                for (panelId, _) in workspace.panels {
+                    guard t3PanelThreadIds[panelId] == threadId else { continue }
+#if DEBUG
+                    dlog(
+                        "t3open.dedup.found panelId=\(panelId.uuidString.prefix(8)) " +
+                        "threadId=\(threadId.prefix(8)) workspaceDir=\(workspaceDir)"
+                    )
+#endif
+                    if let wsIndex = tabManager.tabs.firstIndex(where: { $0.id == workspace.id }) {
+                        tabManager.selectTab(at: wsIndex)
+                        tabManager.tabs[wsIndex].focusPanel(panelId)
+                    }
+                    return
+                }
+            }
+        }
+
+        // Wait for the server to be ready, THEN create the T3CodePanel.
+        // T3CodePanel.init eagerly loads the URL, so the server must be
+        // listening before we create the panel.
+        waitForServerThenCreatePanel(
+            tabManager: tabManager,
+            threadId: threadId,
+            attempt: 0
+        )
+    }
+
+    private static func waitForServerThenCreatePanel(
+        tabManager: TabManager,
+        threadId: String?,
+        attempt: Int
+    ) {
+        guard attempt < 40 else {
+#if DEBUG
+            dlog(
+                "t3open.wait.timeout threadId=\(threadId ?? "nil") " +
+                "projectDirectory=\(T3ServerManager.shared.projectDirectory ?? "nil") " +
+                "t3HomeDirectory=\(T3ServerManager.shared.resolvedT3HomeDirectory)"
+            )
+#endif
+            NSLog("[T3Code] Server did not become ready after 40 attempts")
+            return
+        }
+
+        guard let serverURL = T3ServerManager.shared.serverURL else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                waitForServerThenCreatePanel(tabManager: tabManager, threadId: threadId, attempt: attempt + 1)
+            }
+            return
+        }
+
+        // Probe the server with HTTP to ensure it's actually listening
+        let probe = URLRequest(url: serverURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
+        URLSession.shared.dataTask(with: probe) { _, response, _ in
+            DispatchQueue.main.async {
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    T3ServerManager.shared.isReady = true
+#if DEBUG
+                    dlog(
+                        "t3open.serverReady attempt=\(attempt) threadId=\(threadId ?? "nil") " +
+                        "projectDirectory=\(T3ServerManager.shared.projectDirectory ?? "nil") " +
+                        "t3HomeDirectory=\(T3ServerManager.shared.resolvedT3HomeDirectory)"
+                    )
+#endif
+                    // Server is confirmed listening — NOW create the panel
+                    createT3Panel(tabManager: tabManager, threadId: threadId)
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        waitForServerThenCreatePanel(tabManager: tabManager, threadId: threadId, attempt: attempt + 1)
+                    }
+                }
+            }
+        }.resume()
+    }
+
+    private static func createT3Panel(tabManager: TabManager, threadId: String?) {
+        guard let serverURL = T3ServerManager.shared.serverURL else {
+#if DEBUG
+            dlog("t3open.fail reason=noServerURL")
+#endif
+            return
+        }
+
+        let resolvedThreadId = threadId ?? UUID().uuidString.lowercased()
+        let threadURL = serverURL.appendingPathComponent(resolvedThreadId)
+#if DEBUG
+        dlog(
+            "t3open.createPanel requestedThreadId=\(threadId ?? "nil") " +
+            "resolvedThreadId=\(resolvedThreadId.prefix(8)) url=\(threadURL) " +
+            "projectDirectory=\(T3ServerManager.shared.projectDirectory ?? "nil") " +
+            "t3HomeDirectory=\(T3ServerManager.shared.resolvedT3HomeDirectory)"
+        )
+#endif
+        // Use plain chromeless BrowserPanel — NO bridge scripts.
+        // The T3 frontend falls back to createWsNativeApi() which builds
+        // the full RPC client (including orchestration) using window.location.origin.
+        if let panelId = tabManager.openBrowser(
+            url: threadURL,
+            insertAtEnd: true,
+            chromeless: true
+        ) {
+            t3PanelThreadIds[panelId] = resolvedThreadId
+#if DEBUG
+            dlog("t3open.created panelId=\(panelId.uuidString.prefix(8)) dictCount=\(t3PanelThreadIds.count)")
+#endif
+        }
+    }
+
+    /// Restore a T3 Code tab from session with a saved thread ID.
+    func restoreT3CodeTab(threadId: String, inPane paneId: Bonsplit.PaneID, workspaceId: UUID) {
+        T3ServerManager.shared.registerPanel()
+
+        func tryRestore(attempt: Int) {
+            guard attempt < 40 else { return }
+            guard let serverURL = T3ServerManager.shared.serverURL else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    tryRestore(attempt: attempt + 1)
+                }
+                return
+            }
+
+            let probe = URLRequest(url: serverURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
+            URLSession.shared.dataTask(with: probe) { [weak self] _, response, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                        T3ServerManager.shared.isReady = true
+                        let threadURL = serverURL.appendingPathComponent(threadId)
+                        guard let workspace = self.tabManager?.tabs.first(where: { $0.id == workspaceId }) else { return }
+                        _ = workspace.newBrowserSurface(
+                            inPane: paneId,
+                            url: threadURL,
+                            focus: false,
+                            chromeless: true
+                        )
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            tryRestore(attempt: attempt + 1)
+                        }
+                    }
+                }
+            }.resume()
+        }
+
+        if T3ServerManager.shared.isReady, let serverURL = T3ServerManager.shared.serverURL {
+            let threadURL = serverURL.appendingPathComponent(threadId)
+            guard let workspace = tabManager?.tabs.first(where: { $0.id == workspaceId }) else { return }
+            _ = workspace.newBrowserSurface(
+                inPane: paneId,
+                url: threadURL,
+                focus: false,
+                chromeless: true
+            )
+        } else {
+            tryRestore(attempt: 0)
+        }
     }
 
     private func focusBrowserAddressBar(in panel: BrowserPanel) {

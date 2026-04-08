@@ -2134,6 +2134,10 @@ final class BrowserPanel: Panel, ObservableObject {
     /// New browser tabs stay in an empty "new tab" state until first navigation.
     @Published private(set) var shouldRenderWebView: Bool = false
 
+    /// When true, hides all browser chrome (address bar, toolbar, navigation buttons).
+    /// Used for embedded web apps like T3 Code that should fill the entire panel.
+    @Published var isChromeless: Bool = false
+
     /// True when the browser is showing the internal empty new-tab page (no WKWebView attached yet).
     var isShowingNewTabPage: Bool {
         !shouldRenderWebView
@@ -2594,7 +2598,9 @@ final class BrowserPanel: Panel, ObservableObject {
         bypassInsecureHTTPHostOnce: String? = nil,
         proxyEndpoint: BrowserProxyEndpoint? = nil,
         isRemoteWorkspace: Bool = false,
-        remoteWebsiteDataStoreIdentifier: UUID? = nil
+        remoteWebsiteDataStoreIdentifier: UUID? = nil,
+        initialUserScripts: [WKUserScript] = [],
+        chromeless: Bool = false
     ) {
         self.id = UUID()
         self.workspaceId = workspaceId
@@ -2710,6 +2716,26 @@ final class BrowserPanel: Panel, ObservableObject {
         ReactGrabScriptLoader.prefetch()
         insecureHTTPAlertWindowProvider = { [weak self] in
             self?.webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        }
+
+        // Inject any user scripts before first navigation
+        for script in initialUserScripts {
+            webView.configuration.userContentController.addUserScript(script)
+        }
+
+        // Apply chromeless mode
+        if chromeless {
+            isChromeless = true
+            // Block browser-native shortcuts (Cmd+R reload) in chromeless panels
+            if let cmuxWebView = webView as? CmuxWebView {
+                cmuxWebView.isChromeless = true
+            }
+            // Apply rounded corners at the AppKit layer level so the portal-hosted
+            // WKWebView is properly clipped (SwiftUI .cornerRadius doesn't affect portals).
+            webView.wantsLayer = true
+            webView.layer?.cornerRadius = 18
+            webView.layer?.masksToBounds = true
+            webView.layer?.cornerCurve = .continuous
         }
 
         // Navigate to initial URL if provided

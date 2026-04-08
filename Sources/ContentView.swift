@@ -1600,6 +1600,15 @@ struct ContentView: View {
     @State private var commandPalettePendingActivation: CommandPalettePendingActivation?
     @State private var commandPaletteResultsRevision: UInt64 = 0
     @State private var commandPaletteUsageHistoryByCommandId: [String: CommandPaletteUsageEntry] = [:]
+    @State private var isAgentPickerPresented = false
+    @State private var agentPickerCategory: AgentPickerCategory = .terminal
+    @State private var agentPickerSelectedIndex: Int = 0
+    @State private var agentPickerItems: [AgentPickerItem] = []
+    private let agentPickerDataSource = AgentPickerDataSource()
+    @State private var isContextPagePickerPresented = false
+    @State private var contextPagePickerSelectedIndex: Int = 0
+    @State private var contextPagePickerItems: [ContextPagePickerItem] = []
+    private let contextPagePickerDataSource = ContextPagePickerDataSource()
     @State private var isFeedbackComposerPresented = false
     @AppStorage(CommandPaletteRenameSelectionSettings.selectAllOnFocusKey)
     private var commandPaletteRenameSelectAllOnFocus = CommandPaletteRenameSelectionSettings.defaultSelectAllOnFocus
@@ -2347,8 +2356,12 @@ struct ContentView: View {
     private var terminalPanelView: some View {
         Group {
             if selectedWorkspaceUsesPeerPaneCards {
+                // Split: keep 1pt padding for consistent geometry, skip panel chrome
+                // (each pane has its own card styling via PaneContainerView)
                 terminalContentWithSidebarDropOverlay
+                    .padding(1)
             } else {
+                // Unsplit: 1pt padding + full panel chrome (white card, border, shadow)
                 terminalContentWithSidebarDropOverlay
                     .padding(1)
                     .designPanel()
@@ -2870,6 +2883,28 @@ struct ContentView: View {
             toggleCommandPalette()
         })
 
+        view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .agentPickerToggleRequested)) { notification in
+            let requestedWindow = notification.object as? NSWindow
+            guard Self.shouldHandleCommandPaletteRequest(
+                observedWindow: observedWindow,
+                requestedWindow: requestedWindow,
+                keyWindow: NSApp.keyWindow,
+                mainWindow: NSApp.mainWindow
+            ) else { return }
+            toggleAgentPicker()
+        })
+
+        view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .contextPagePickerToggleRequested)) { notification in
+            let requestedWindow = notification.object as? NSWindow
+            guard Self.shouldHandleCommandPaletteRequest(
+                observedWindow: observedWindow,
+                requestedWindow: requestedWindow,
+                keyWindow: NSApp.keyWindow,
+                mainWindow: NSApp.mainWindow
+            ) else { return }
+            toggleContextPagePicker()
+        })
+
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .commandPaletteRequested)) { notification in
             let requestedWindow = notification.object as? NSWindow
             guard Self.shouldHandleCommandPaletteRequest(
@@ -2995,6 +3030,15 @@ struct ContentView: View {
                 tmuxOverlayController.update(state: tmuxWorkspacePaneWindowOverlayState(for: window))
                 let overlayController = commandPaletteWindowOverlayController(for: window)
                 overlayController.update(rootView: AnyView(commandPaletteOverlay), isVisible: isCommandPalettePresented)
+                let agentPickerController = agentPickerWindowOverlayController(for: window)
+                agentPickerController.update(rootView: AnyView(agentPickerOverlay), isVisible: isAgentPickerPresented)
+                configureAgentPickerKeyboardHandler(agentPickerController)
+                let contextPagePickerController = contextPagePickerWindowOverlayController(for: window)
+                contextPagePickerController.update(
+                    rootView: AnyView(contextPagePickerOverlay),
+                    isVisible: isContextPagePickerPresented
+                )
+                configureContextPagePickerKeyboardHandler(contextPagePickerController)
             }
         }))
 
@@ -4947,11 +4991,12 @@ struct ContentView: View {
 
     private func commandPaletteOrderedSwitcherPanels(for workspace: Workspace) -> [UUID] {
         let orderedPanelIds = workspace.sidebarOrderedPanelIds()
-        guard orderedPanelIds.count < workspace.panels.count else { return orderedPanelIds }
+        let agentPanelIds = workspace.panels.keys.filter { workspace.isAgentPanel($0) }
+        guard orderedPanelIds.count < agentPanelIds.count else { return orderedPanelIds }
 
         var panelIds = orderedPanelIds
         var seen = Set(orderedPanelIds)
-        for panelId in workspace.panels.keys.sorted(by: { $0.uuidString < $1.uuidString })
+        for panelId in agentPanelIds.sorted(by: { $0.uuidString < $1.uuidString })
         where seen.insert(panelId).inserted {
             panelIds.append(panelId)
         }
@@ -5018,6 +5063,10 @@ struct ContentView: View {
             return String(localized: "commandPalette.kind.browser", defaultValue: "Browser")
         case .markdown:
             return String(localized: "commandPalette.kind.markdown", defaultValue: "Markdown")
+        case .t3code:
+            return String(localized: "commandPalette.kind.t3code", defaultValue: "T3 Code")
+        case .context:
+            return String(localized: "commandPalette.kind.context", defaultValue: "Context")
         }
     }
 
@@ -5029,6 +5078,10 @@ struct ContentView: View {
             return ["browser", "web", "page"]
         case .markdown:
             return ["markdown", "note", "preview"]
+        case .t3code:
+            return ["t3", "code", "agent", "ai", "t3code", "claude"]
+        case .context:
+            return ["context", "guide", "plan", "agent", "notes"]
         }
     }
 
@@ -6828,6 +6881,328 @@ struct ContentView: View {
         return false
     }
 
+    // MARK: - Agent Picker
+
+    private var agentPickerOverlay: some View {
+        AgentPickerView(
+            category: agentPickerCategory,
+            selectedIndex: agentPickerSelectedIndex,
+            items: agentPickerItems,
+            onSelectCategory: { cat in
+                agentPickerCategory = cat
+                refreshAgentPickerItems()
+            },
+            onActivateItem: { index in
+                activateAgentPickerItem(at: index)
+            },
+            onDismiss: {
+                dismissAgentPicker()
+            }
+        )
+    }
+
+    private func toggleAgentPicker() {
+        if isAgentPickerPresented {
+            dismissAgentPicker()
+        } else {
+            presentAgentPicker()
+        }
+    }
+
+    private func presentAgentPicker() {
+        // Dismiss command palette if open
+        if isCommandPalettePresented {
+            dismissCommandPalette(restoreFocus: false)
+        }
+        if isContextPagePickerPresented {
+            dismissContextPagePicker()
+        }
+        isAgentPickerPresented = true
+        AgentPickerState.isVisible = true
+        agentPickerSelectedIndex = 0
+        refreshAgentPickerItems()
+    }
+
+    private func dismissAgentPicker() {
+        isAgentPickerPresented = false
+        AgentPickerState.isVisible = false
+        agentPickerItems = []
+    }
+
+    private func refreshAgentPickerItems() {
+        // Always include own tabManager first (most reliable), then add others
+        var allTabManagers: [(tabManager: TabManager, windowTitle: String?)] = []
+        allTabManagers.append((tabManager, nil))
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            for entry in appDelegate.allTabManagers() {
+                // Skip if it's the same tabManager we already added
+                if entry.tabManager !== tabManager {
+                    allTabManagers.append((entry.tabManager, entry.window?.title))
+                }
+            }
+        }
+
+        let workspaceDir = tabManager.selectedWorkspace?.currentDirectory
+
+        agentPickerItems = agentPickerDataSource.items(
+            for: agentPickerCategory,
+            tabManager: tabManager,
+            allTabManagers: allTabManagers,
+            workspaceDirectory: workspaceDir,
+            openT3Code: { [weak tabManager] threadId in
+#if DEBUG
+                dlog("t3open.closure threadId=\(threadId ?? "nil") tabManagerAlive=\(tabManager != nil ? 1 : 0)")
+#endif
+                guard let tabManager else { return }
+                let workspaceDir = tabManager.selectedWorkspace?.currentDirectory ?? NSHomeDirectory()
+#if DEBUG
+                dlog("t3open.closure.call threadId=\(threadId ?? "nil") workspaceDir=\(workspaceDir) selectedTabId=\(tabManager.selectedTabId?.uuidString.prefix(8) ?? "nil") tabCount=\(tabManager.tabs.count)")
+#endif
+                AppDelegate.openT3CodePanel(tabManager: tabManager, threadId: threadId, workspaceDir: workspaceDir)
+            },
+            openOMO: { [weak tabManager] sessionArgs in
+                guard let tabManager,
+                      let workspace = tabManager.selectedWorkspace,
+                      let focusedPaneId = workspace.bonsplitController.focusedPaneId
+                else { return }
+                // Create a new terminal surface running cmux omo with the session args
+                let command: String
+                if sessionArgs.isEmpty {
+                    command = "cmux omo"
+                } else {
+                    command = "cmux omo " + sessionArgs.map { arg in
+                        arg.contains(" ") ? "\"\(arg)\"" : arg
+                    }.joined(separator: " ")
+                }
+                workspace.clearSplitZoom()
+                workspace.newTerminalSurface(
+                    inPane: focusedPaneId,
+                    focus: true,
+                    initialCommand: command
+                )
+            },
+            focusPanel: { targetTm, workspaceId, panelId in
+                // Focus the workspace containing this panel
+                if let wsIndex = targetTm.tabs.firstIndex(where: { $0.id == workspaceId }) {
+                    targetTm.selectTab(at: wsIndex)
+                    targetTm.tabs[wsIndex].focusPanel(panelId)
+                }
+                // Bring the window to front if it's in a different window
+                if let window = targetTm.window {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
+        )
+
+        agentPickerSelectedIndex = min(agentPickerSelectedIndex, max(agentPickerItems.count - 1, 0))
+    }
+
+    private func activateAgentPickerItem(at index: Int) {
+        guard index >= 0, index < agentPickerItems.count else { return }
+        let item = agentPickerItems[index]
+#if DEBUG
+        dlog("t3open.activate index=\(index) itemId=\(item.id) title=\(item.title) isCreateNew=\(item.isCreateNew ? 1 : 0)")
+#endif
+        dismissAgentPicker()
+        item.action()
+    }
+
+    private func configureAgentPickerKeyboardHandler(_ controller: AgentPickerOverlayController) {
+        controller.onKeyEvent = { event -> Bool in
+            handleAgentPickerKeyEvent(event)
+        }
+    }
+
+    private func handleAgentPickerKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+
+        // Escape: dismiss
+        if event.keyCode == 53, flags.isEmpty {
+            dismissAgentPicker()
+            return true
+        }
+
+        // Return: activate selected item
+        if (event.keyCode == 36 || event.keyCode == 76), flags.isEmpty {
+            activateAgentPickerItem(at: agentPickerSelectedIndex)
+            return true
+        }
+
+        // Cmd+1/2/3: switch category
+        if flags == .command, let chars = event.charactersIgnoringModifiers {
+            if let digit = Int(chars), (1...3).contains(digit),
+               let cat = AgentPickerCategory(rawValue: digit) {
+                agentPickerCategory = cat
+                agentPickerSelectedIndex = 0
+                refreshAgentPickerItems()
+                return true
+            }
+        }
+
+        // 'n' key: create new (activate first item, which is always "New...")
+        if flags.isEmpty, let chars = event.charactersIgnoringModifiers, chars == "n" {
+            activateAgentPickerItem(at: 0)
+            return true
+        }
+
+        // Plain digits 1-9: quick-select item
+        if flags.isEmpty, let chars = event.charactersIgnoringModifiers,
+           let digit = Int(chars), digit >= 1, digit <= 9 {
+            let index = digit - 1
+            if index < agentPickerItems.count {
+                activateAgentPickerItem(at: index)
+            }
+            return true
+        }
+
+        // Arrow keys / Ctrl+N/P: navigate
+        if let delta = agentPickerSelectionDelta(event: event, flags: flags) {
+            let newIndex = min(max(agentPickerSelectedIndex + delta, 0), max(agentPickerItems.count - 1, 0))
+            agentPickerSelectedIndex = newIndex
+            return true
+        }
+
+        // Tab / Shift+Tab: cycle categories
+        if event.keyCode == 48 { // Tab key
+            let allCases = AgentPickerCategory.allCases
+            if let currentIndex = allCases.firstIndex(of: agentPickerCategory) {
+                let nextIndex: Int
+                if flags.contains(.shift) {
+                    nextIndex = (currentIndex - 1 + allCases.count) % allCases.count
+                } else {
+                    nextIndex = (currentIndex + 1) % allCases.count
+                }
+                agentPickerCategory = allCases[nextIndex]
+                agentPickerSelectedIndex = 0
+                refreshAgentPickerItems()
+            }
+            return true
+        }
+
+        // Consume all other keys while picker is open
+        return true
+    }
+
+    private func agentPickerSelectionDelta(event: NSEvent, flags: NSEvent.ModifierFlags) -> Int? {
+        // Down arrow
+        if event.keyCode == 125, flags.isEmpty { return 1 }
+        // Up arrow
+        if event.keyCode == 126, flags.isEmpty { return -1 }
+        // Ctrl+N
+        if flags == .control, let chars = event.charactersIgnoringModifiers,
+           chars == "n" || chars == "\u{0e}" { return 1 }
+        // Ctrl+P
+        if flags == .control, let chars = event.charactersIgnoringModifiers,
+           chars == "p" || chars == "\u{10}" { return -1 }
+        return nil
+    }
+
+    // MARK: - Context Page Picker
+
+    private var contextPagePickerOverlay: some View {
+        ContextPagePickerView(
+            selectedIndex: contextPagePickerSelectedIndex,
+            items: contextPagePickerItems,
+            onActivateItem: { index in
+                activateContextPagePickerItem(at: index)
+            },
+            onDismiss: {
+                dismissContextPagePicker()
+            }
+        )
+    }
+
+    private func toggleContextPagePicker() {
+        if isContextPagePickerPresented {
+            dismissContextPagePicker()
+        } else {
+            presentContextPagePicker()
+        }
+    }
+
+    private func presentContextPagePicker() {
+        if isCommandPalettePresented {
+            dismissCommandPalette(restoreFocus: false)
+        }
+        if isAgentPickerPresented {
+            dismissAgentPicker()
+        }
+        refreshContextPagePickerItems()
+        guard !contextPagePickerItems.isEmpty else { return }
+        isContextPagePickerPresented = true
+        ContextPagePickerState.isVisible = true
+        contextPagePickerSelectedIndex = 0
+    }
+
+    private func dismissContextPagePicker() {
+        isContextPagePickerPresented = false
+        ContextPagePickerState.isVisible = false
+        contextPagePickerItems = []
+    }
+
+    private func refreshContextPagePickerItems() {
+        contextPagePickerItems = contextPagePickerDataSource.items { [weak tabManager] kind in
+            guard let workspace = tabManager?.selectedWorkspace,
+                  let agentPanelId = workspace.selectedAgentPanelId else {
+                return
+            }
+            workspace.selectContextPage(forAgentPanelId: agentPanelId, kind: kind)
+        }
+        contextPagePickerSelectedIndex = min(
+            contextPagePickerSelectedIndex,
+            max(contextPagePickerItems.count - 1, 0)
+        )
+    }
+
+    private func activateContextPagePickerItem(at index: Int) {
+        guard index >= 0, index < contextPagePickerItems.count else { return }
+        let item = contextPagePickerItems[index]
+        dismissContextPagePicker()
+        item.action()
+    }
+
+    private func configureContextPagePickerKeyboardHandler(_ controller: ContextPagePickerOverlayController) {
+        controller.onKeyEvent = { event -> Bool in
+            handleContextPagePickerKeyEvent(event)
+        }
+    }
+
+    private func handleContextPagePickerKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+
+        if event.keyCode == 53, flags.isEmpty {
+            dismissContextPagePicker()
+            return true
+        }
+
+        if (event.keyCode == 36 || event.keyCode == 76), flags.isEmpty {
+            activateContextPagePickerItem(at: contextPagePickerSelectedIndex)
+            return true
+        }
+
+        if flags.isEmpty, let chars = event.charactersIgnoringModifiers,
+           let digit = Int(chars), digit >= 1, digit <= 9 {
+            let index = digit - 1
+            if index < contextPagePickerItems.count {
+                activateContextPagePickerItem(at: index)
+            }
+            return true
+        }
+
+        if let delta = agentPickerSelectionDelta(event: event, flags: flags) {
+            let newIndex = min(
+                max(contextPagePickerSelectedIndex + delta, 0),
+                max(contextPagePickerItems.count - 1, 0)
+            )
+            contextPagePickerSelectedIndex = newIndex
+            return true
+        }
+
+        return true
+    }
+
     static func shouldRestoreBrowserAddressBarAfterCommandPaletteDismiss(
         focusedPanelIsBrowser: Bool,
         focusedBrowserAddressBarPanelId: UUID?,
@@ -7138,6 +7513,8 @@ struct ContentView: View {
             return "browser.addressBar"
         case .browser(.findField):
             return "browser.findField"
+        case .t3code(.webView):
+            return "t3code.webView"
         }
     }
 #endif
@@ -8684,6 +9061,7 @@ struct VerticalTabsSidebar: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .backport.pointerStyle(.link)
                 .safeHelp(String(localized: "sidebar.collapse.tooltip", defaultValue: "Hide sidebar"))
                 .accessibilityLabel(String(localized: "sidebar.collapse.accessibility", defaultValue: "Hide sidebar"))
             }
@@ -8715,6 +9093,7 @@ struct VerticalTabsSidebar: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .backport.pointerStyle(.link)
                 .safeHelp(String(localized: "sidebar.expand.tooltip", defaultValue: "Show sidebar"))
                 .accessibilityLabel(String(localized: "sidebar.expand.accessibility", defaultValue: "Show sidebar"))
             }
@@ -8732,6 +9111,7 @@ struct VerticalTabsSidebar: View {
                     )
             }
             .buttonStyle(.plain)
+            .backport.pointerStyle(.link)
             .safeHelp(String(localized: "sidebar.newWorkspace.tooltip", defaultValue: "Create a new workspace"))
             .padding(.top, DesignSystem.Metrics.sidebarHeaderToPrimaryGap)
         }
@@ -8757,6 +9137,7 @@ struct VerticalTabsSidebar: View {
             )
         }
         .buttonStyle(.plain)
+        .backport.pointerStyle(.link)
         .safeHelp(String(localized: "sidebar.newWorkspace.tooltip", defaultValue: "Create a new workspace"))
     }
 
@@ -8792,6 +9173,7 @@ struct VerticalTabsSidebar: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .backport.pointerStyle(.link)
                     .safeHelp(tab.title)
                 }
             }
@@ -11571,6 +11953,7 @@ private struct TabItemView: View, Equatable {
                             .foregroundColor(activeSecondaryColor(0.7))
                     }
                     .buttonStyle(.plain)
+                    .backport.pointerStyle(.link)
                     .safeHelp(closeButtonTooltip)
                     .frame(width: SidebarTrailingAccessoryWidthPolicy.closeButtonWidth, height: 16, alignment: .center)
                     .opacity(showCloseButton && !showsWorkspaceShortcutHint ? 1 : 0)
@@ -11643,6 +12026,7 @@ private struct TabItemView: View, Equatable {
             }
         }
         .contentShape(Rectangle())
+        .backport.pointerStyle(.link)
         .opacity(isBeingDragged ? 0.6 : 1)
         .overlay {
             MiddleClickCapture {

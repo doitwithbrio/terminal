@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 
 #if canImport(cmux_DEV)
 @testable import cmux_DEV
@@ -1230,5 +1231,269 @@ final class SidebarDragFailsafePolicyTests: XCTestCase {
                 forMouseEventType: .leftMouseDragged
             )
         )
+    }
+}
+
+@MainActor
+final class AgentPickerAndT3ServerManagerTests: XCTestCase {
+    func testQueryT3ThreadsScopesToExactWorkspaceDirectory() throws {
+        let root = try makeTemporaryDirectory(prefix: "cmux-t3-picker")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let dbURL = root.appendingPathComponent("state.sqlite")
+        try createT3Database(
+            at: dbURL,
+            projects: [
+                (id: "project-terminal", workspaceRoot: "/Users/tim/Desktop/terminal"),
+                (id: "project-notes", workspaceRoot: "/Users/tim/Desktop/notes"),
+            ],
+            threads: [
+                (
+                    id: "thread-terminal-root",
+                    projectId: "project-terminal",
+                    title: "terminal root",
+                    worktreePath: nil,
+                    updatedAt: "2026-04-08T10:00:00.000Z"
+                ),
+                (
+                    id: "thread-notes-root",
+                    projectId: "project-notes",
+                    title: "notes root",
+                    worktreePath: nil,
+                    updatedAt: "2026-04-08T11:00:00.000Z"
+                ),
+            ]
+        )
+
+        let threads = AgentPickerDataSource.queryT3Threads(
+            at: dbURL.path,
+            workspaceDirectory: "/Users/tim/Desktop/terminal",
+            limit: 20
+        )
+
+        XCTAssertEqual(threads.map(\.threadId), ["thread-terminal-root"])
+    }
+
+    func testQueryT3ThreadsPrefersWorktreePathOverWorkspaceRoot() throws {
+        let root = try makeTemporaryDirectory(prefix: "cmux-t3-picker")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let dbURL = root.appendingPathComponent("state.sqlite")
+        try createT3Database(
+            at: dbURL,
+            projects: [
+                (id: "project-terminal", workspaceRoot: "/Users/tim/Desktop/terminal"),
+            ],
+            threads: [
+                (
+                    id: "thread-root",
+                    projectId: "project-terminal",
+                    title: "root thread",
+                    worktreePath: nil,
+                    updatedAt: "2026-04-08T10:00:00.000Z"
+                ),
+                (
+                    id: "thread-worktree",
+                    projectId: "project-terminal",
+                    title: "worktree thread",
+                    worktreePath: "/Users/tim/Desktop/terminal-worktree",
+                    updatedAt: "2026-04-08T11:00:00.000Z"
+                ),
+            ]
+        )
+
+        let threads = AgentPickerDataSource.queryT3Threads(
+            at: dbURL.path,
+            workspaceDirectory: "/Users/tim/Desktop/terminal",
+            limit: 20
+        )
+
+        XCTAssertEqual(threads.map(\.threadId), ["thread-root"])
+    }
+
+    func testQueryOpenCodeSessionsScopesToExactDirectory() throws {
+        let root = try makeTemporaryDirectory(prefix: "cmux-opencode-picker")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let dbURL = root.appendingPathComponent("opencode.db")
+        try createOpenCodeDatabase(
+            at: dbURL,
+            sessions: [
+                (
+                    id: "session-terminal",
+                    title: "terminal session",
+                    timeUpdated: 1_744_108_800_000,
+                    directory: "/Users/tim/Desktop/terminal"
+                ),
+                (
+                    id: "session-notes",
+                    title: "notes session",
+                    timeUpdated: 1_744_108_900_000,
+                    directory: "/Users/tim/Desktop/notes"
+                ),
+            ]
+        )
+
+        let sessions = AgentPickerDataSource.queryOpenCodeSessions(
+            at: dbURL.path,
+            directory: "/Users/tim/Desktop/terminal",
+            limit: 20
+        )
+
+        XCTAssertEqual(sessions.map(\.id), ["session-terminal"])
+    }
+
+    func testT3ServerEnvironmentUsesWorkspaceCwdAndGlobalT3Home() {
+        let projectDirectory = "/Users/tester/project"
+        let t3HomeDirectory = T3ServerManager.resolvedT3HomeDirectory(homeDirectory: "/Users/tester")
+        let environment = T3ServerManager.makeEnvironment(
+            projectDirectory: projectDirectory,
+            t3HomeDirectory: t3HomeDirectory,
+            reservedPort: 43123,
+            serverDirectory: URL(fileURLWithPath: "/tmp/t3code-server"),
+            baseEnvironment: [:]
+        )
+
+        XCTAssertEqual(t3HomeDirectory, "/Users/tester/.t3")
+        XCTAssertEqual(environment["T3CODE_HOME"], "/Users/tester/.t3")
+        XCTAssertEqual(environment["T3CODE_PORT"], "43123")
+        XCTAssertEqual(environment["T3CODE_HOST"], "127.0.0.1")
+        XCTAssertEqual(environment["NODE_PATH"], "/tmp/t3code-server/node_modules")
+        XCTAssertNotEqual(environment["T3CODE_HOME"], projectDirectory)
+    }
+
+    private func makeTemporaryDirectory(prefix: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func createT3Database(
+        at dbURL: URL,
+        projects: [(id: String, workspaceRoot: String)],
+        threads: [(id: String, projectId: String, title: String, worktreePath: String?, updatedAt: String)]
+    ) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+        guard let db else {
+            XCTFail("Expected sqlite database handle")
+            return
+        }
+        defer { sqlite3_close(db) }
+
+        try executeSQL(
+            """
+            CREATE TABLE projection_projects (
+                project_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                workspace_root TEXT NOT NULL,
+                scripts_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT,
+                default_model_selection_json TEXT
+            );
+            CREATE TABLE projection_threads (
+                thread_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                branch TEXT,
+                worktree_path TEXT,
+                latest_turn_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT,
+                runtime_mode TEXT NOT NULL DEFAULT 'full-access',
+                interaction_mode TEXT NOT NULL DEFAULT 'default',
+                model_selection_json TEXT,
+                archived_at TEXT
+            );
+            """,
+            in: db
+        )
+
+        for project in projects {
+            try executeSQL(
+                """
+                INSERT INTO projection_projects (
+                    project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+                ) VALUES (
+                    '\(project.id)', '\(project.id)', '\(project.workspaceRoot)', '[]',
+                    '2026-04-08T09:00:00.000Z', '2026-04-08T09:00:00.000Z', NULL
+                );
+                """,
+                in: db
+            )
+        }
+
+        for thread in threads {
+            let worktreePathValue = thread.worktreePath.map { "'\($0)'" } ?? "NULL"
+            try executeSQL(
+                """
+                INSERT INTO projection_threads (
+                    thread_id, project_id, title, branch, worktree_path, latest_turn_id,
+                    created_at, updated_at, deleted_at, runtime_mode, interaction_mode,
+                    model_selection_json, archived_at
+                ) VALUES (
+                    '\(thread.id)', '\(thread.projectId)', '\(thread.title)', NULL, \(worktreePathValue), NULL,
+                    '2026-04-08T09:00:00.000Z', '\(thread.updatedAt)', NULL,
+                    'full-access', 'default', NULL, NULL
+                );
+                """,
+                in: db
+            )
+        }
+    }
+
+    private func createOpenCodeDatabase(
+        at dbURL: URL,
+        sessions: [(id: String, title: String, timeUpdated: Int64, directory: String)]
+    ) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+        guard let db else {
+            XCTFail("Expected sqlite database handle")
+            return
+        }
+        defer { sqlite3_close(db) }
+
+        try executeSQL(
+            """
+            CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                time_updated INTEGER NOT NULL,
+                time_archived INTEGER,
+                parent_id TEXT,
+                directory TEXT NOT NULL
+            );
+            """,
+            in: db
+        )
+
+        for session in sessions {
+            try executeSQL(
+                """
+                INSERT INTO session (
+                    id, title, time_updated, time_archived, parent_id, directory
+                ) VALUES (
+                    '\(session.id)', '\(session.title)', \(session.timeUpdated), NULL, NULL, '\(session.directory)'
+                );
+                """,
+                in: db
+            )
+        }
+    }
+
+    private func executeSQL(_ sql: String, in db: OpaquePointer) throws {
+        var errorMessage: UnsafeMutablePointer<Int8>?
+        defer { sqlite3_free(errorMessage) }
+        if sqlite3_exec(db, sql, nil, nil, &errorMessage) != SQLITE_OK {
+            let message = errorMessage.map { String(cString: $0) } ?? "Unknown sqlite error"
+            throw NSError(domain: "AgentPickerAndT3ServerManagerTests", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
     }
 }

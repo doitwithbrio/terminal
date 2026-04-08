@@ -224,6 +224,10 @@ struct SessionGitBranchSnapshot: Codable, Sendable {
 struct SessionTerminalPanelSnapshot: Codable, Sendable {
     var workingDirectory: String?
     var scrollback: String?
+    /// Stable session ID for cmux-persist daemon. When present and the daemon
+    /// is still alive on restore, the terminal reattaches to the existing session
+    /// (preserving running processes) instead of replaying scrollback.
+    var persistSessionId: String?
 }
 
 struct SessionBrowserPanelSnapshot: Codable, Sendable {
@@ -240,6 +244,17 @@ struct SessionMarkdownPanelSnapshot: Codable, Sendable {
     var filePath: String
 }
 
+struct SessionT3CodePanelSnapshot: Codable, Sendable {
+    /// The thread ID for this T3 Code conversation tab.
+    var threadId: String?
+}
+
+struct SessionAgentContextBindingSnapshot: Codable, Sendable {
+    var agentPanelId: UUID
+    var kindRawValue: String
+    var planFilePath: String?
+}
+
 struct SessionPanelSnapshot: Codable, Sendable {
     var id: UUID
     var type: PanelType
@@ -254,6 +269,7 @@ struct SessionPanelSnapshot: Codable, Sendable {
     var terminal: SessionTerminalPanelSnapshot?
     var browser: SessionBrowserPanelSnapshot?
     var markdown: SessionMarkdownPanelSnapshot?
+    var t3code: SessionT3CodePanelSnapshot?
 }
 
 enum SessionSplitOrientation: String, Codable, Sendable {
@@ -340,6 +356,7 @@ struct SessionWorkspaceSnapshot: Codable, Sendable {
     var logEntries: [SessionLogEntrySnapshot]
     var progress: SessionProgressSnapshot?
     var gitBranch: SessionGitBranchSnapshot?
+    var contextBindings: [SessionAgentContextBindingSnapshot] = []
 }
 
 struct SessionTabManagerSnapshot: Codable, Sendable {

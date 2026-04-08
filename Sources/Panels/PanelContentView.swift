@@ -55,6 +55,26 @@ struct PanelContentView: View {
                     onRequestPanelFocus: onRequestPanelFocus
                 )
             }
+        case .t3code:
+            if let t3Panel = panel as? T3CodePanel {
+                T3CodePanelView(
+                    panel: t3Panel,
+                    isFocused: isFocused,
+                    isVisibleInUI: isVisibleInUI,
+                    portalPriority: portalPriority,
+                    onRequestPanelFocus: onRequestPanelFocus
+                )
+            }
+        case .context:
+            if let contextPanel = panel as? ContextPanel {
+                ContextPanelView(
+                    panel: contextPanel,
+                    isFocused: isFocused,
+                    isVisibleInUI: isVisibleInUI,
+                    portalPriority: portalPriority,
+                    onRequestPanelFocus: onRequestPanelFocus
+                )
+            }
         }
     }
 }

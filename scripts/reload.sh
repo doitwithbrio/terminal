@@ -448,11 +448,15 @@ if [[ -x "$CLI_PATH" ]]; then
   fi
 fi
 
-# Build cmuxd and ghostty helper binaries (needed for both launch and no-launch).
+# Build cmuxd, cmux-persist, and ghostty helper binaries (needed for both launch and no-launch).
 CMUXD_SRC="$PWD/cmuxd/zig-out/bin/cmuxd"
+CMUX_PERSIST_SRC="$PWD/cmux-persist/zig-out/bin/cmux-persist"
 GHOSTTY_HELPER_SRC="$PWD/ghostty/zig-out/bin/ghostty"
 if [[ -d "$PWD/cmuxd" ]]; then
   (cd "$PWD/cmuxd" && zig build -Doptimize=ReleaseFast)
+fi
+if [[ -d "$PWD/cmux-persist" ]]; then
+  (cd "$PWD/cmux-persist" && bash build.sh ReleaseFast)
 fi
 if [[ -d "$PWD/ghostty" ]]; then
   if [[ "${CMUX_SKIP_ZIG_BUILD:-}" == "1" ]]; then
@@ -466,6 +470,12 @@ if [[ -x "$CMUXD_SRC" ]]; then
   mkdir -p "$BIN_DIR"
   cp "$CMUXD_SRC" "$BIN_DIR/cmuxd"
   chmod +x "$BIN_DIR/cmuxd"
+fi
+if [[ -x "$CMUX_PERSIST_SRC" ]]; then
+  BIN_DIR="$APP_PATH/Contents/Resources/bin"
+  mkdir -p "$BIN_DIR"
+  cp "$CMUX_PERSIST_SRC" "$BIN_DIR/cmux-persist"
+  chmod +x "$BIN_DIR/cmux-persist"
 fi
 if [[ -x "$GHOSTTY_HELPER_SRC" ]]; then
   BIN_DIR="$APP_PATH/Contents/Resources/bin"
