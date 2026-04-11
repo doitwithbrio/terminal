@@ -10489,10 +10489,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Open a T3 Code thread. If `threadId` is nil, creates a new thread.
     @discardableResult
-    func openT3Code(threadId: String?) -> UUID? {
+    func openT3Code(threadId: String?, threadTitle: String? = nil) -> UUID? {
         guard let tabManager else { return nil }
         let workspaceDir = tabManager.selectedWorkspace?.currentDirectory ?? NSHomeDirectory()
-        Self.openT3CodePanel(tabManager: tabManager, threadId: threadId, workspaceDir: workspaceDir)
+        Self.openT3CodePanel(tabManager: tabManager, threadId: threadId, threadTitle: threadTitle, workspaceDir: workspaceDir)
         return nil
     }
 
@@ -10506,6 +10506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     static func openT3CodePanel(
         tabManager: TabManager,
         threadId: String?,
+        threadTitle: String? = nil,
         workspaceDir: String
     ) {
         T3ServerManager.shared.projectDirectory = workspaceDir
@@ -10541,12 +10542,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
 
-        // Wait for the server to be ready, THEN create the T3CodePanel.
-        // T3CodePanel.init eagerly loads the URL, so the server must be
-        // listening before we create the panel.
+        // Wait for the server to be ready, then create the chromeless BrowserPanel
+        // that hosts the live T3 web client.
         waitForServerThenCreatePanel(
             tabManager: tabManager,
             threadId: threadId,
+            threadTitle: threadTitle,
             attempt: 0
         )
     }
@@ -10554,6 +10555,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private static func waitForServerThenCreatePanel(
         tabManager: TabManager,
         threadId: String?,
+        threadTitle: String? = nil,
         attempt: Int
     ) {
         guard attempt < 40 else {
@@ -10570,7 +10572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         guard let serverURL = T3ServerManager.shared.serverURL else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                waitForServerThenCreatePanel(tabManager: tabManager, threadId: threadId, attempt: attempt + 1)
+                waitForServerThenCreatePanel(tabManager: tabManager, threadId: threadId, threadTitle: threadTitle, attempt: attempt + 1)
             }
             return
         }
@@ -10588,18 +10590,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         "t3HomeDirectory=\(T3ServerManager.shared.resolvedT3HomeDirectory)"
                     )
 #endif
-                    // Server is confirmed listening — NOW create the panel
-                    createT3Panel(tabManager: tabManager, threadId: threadId)
+                    // Server is confirmed listening — now create the live T3 browser panel.
+                    createT3Panel(tabManager: tabManager, threadId: threadId, threadTitle: threadTitle)
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        waitForServerThenCreatePanel(tabManager: tabManager, threadId: threadId, attempt: attempt + 1)
+                        waitForServerThenCreatePanel(tabManager: tabManager, threadId: threadId, threadTitle: threadTitle, attempt: attempt + 1)
                     }
                 }
             }
         }.resume()
     }
 
-    private static func createT3Panel(tabManager: TabManager, threadId: String?) {
+    private static func createT3Panel(tabManager: TabManager, threadId: String?, threadTitle: String? = nil) {
         guard let serverURL = T3ServerManager.shared.serverURL else {
 #if DEBUG
             dlog("t3open.fail reason=noServerURL")
@@ -10617,18 +10619,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "t3HomeDirectory=\(T3ServerManager.shared.resolvedT3HomeDirectory)"
         )
 #endif
-        // Use plain chromeless BrowserPanel — NO bridge scripts.
-        // The T3 frontend falls back to createWsNativeApi() which builds
-        // the full RPC client (including orchestration) using window.location.origin.
-        if let panelId = tabManager.openBrowser(
+        // Use a chromeless BrowserPanel for the live T3 web client.
+        // This remains a plain web client; we inject only the host theme scripts.
+        if let workspaceId = tabManager.selectedTabId,
+           let panelId = tabManager.openBrowser(
+            inWorkspace: workspaceId,
             url: threadURL,
             insertAtEnd: true,
-            chromeless: true
+            initialUserScripts: T3CodeWebSupport.makeInitialUserScripts(),
+            chromeless: true,
+            initialTitle: threadTitle
         ) {
             t3PanelThreadIds[panelId] = resolvedThreadId
 #if DEBUG
             dlog("t3open.created panelId=\(panelId.uuidString.prefix(8)) dictCount=\(t3PanelThreadIds.count)")
 #endif
+            scheduleT3ThemeVerification(tabManager: tabManager, panelId: panelId)
         }
     }
 
@@ -10653,12 +10659,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         T3ServerManager.shared.isReady = true
                         let threadURL = serverURL.appendingPathComponent(threadId)
                         guard let workspace = self.tabManager?.tabs.first(where: { $0.id == workspaceId }) else { return }
-                        _ = workspace.newBrowserSurface(
+                        if let browserPanel = workspace.newBrowserSurface(
                             inPane: paneId,
                             url: threadURL,
                             focus: false,
+                            initialUserScripts: T3CodeWebSupport.makeInitialUserScripts(),
                             chromeless: true
-                        )
+                        ) {
+                            Self.scheduleT3ThemeVerification(tabManager: self.tabManager, panelId: browserPanel.id)
+                        }
                     } else {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                             tryRestore(attempt: attempt + 1)
@@ -10671,15 +10680,180 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if T3ServerManager.shared.isReady, let serverURL = T3ServerManager.shared.serverURL {
             let threadURL = serverURL.appendingPathComponent(threadId)
             guard let workspace = tabManager?.tabs.first(where: { $0.id == workspaceId }) else { return }
-            _ = workspace.newBrowserSurface(
+            if let browserPanel = workspace.newBrowserSurface(
                 inPane: paneId,
                 url: threadURL,
                 focus: false,
+                initialUserScripts: T3CodeWebSupport.makeInitialUserScripts(),
                 chromeless: true
-            )
+            ) {
+                Self.scheduleT3ThemeVerification(tabManager: tabManager, panelId: browserPanel.id)
+            }
         } else {
             tryRestore(attempt: 0)
         }
+    }
+
+    private static func scheduleT3ThemeVerification(
+        tabManager: TabManager?,
+        panelId: UUID,
+        attempt: Int = 0
+    ) {
+        let themeEnabled = T3CodeWebSupport.isHostThemeEnabled()
+        guard themeEnabled else {
+#if DEBUG
+            dlog("t3theme.verify.skipped panelId=\(panelId.uuidString.prefix(8)) reason=theme_disabled")
+#endif
+            return
+        }
+
+        guard attempt < T3CodeWebSupport.maxReadinessAttempts else {
+            autoDisableT3Theme(tabManager: tabManager, panelId: panelId, payload: nil)
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard let browserPanel = browserPanel(for: panelId, tabManager: tabManager) else {
+#if DEBUG
+                dlog("t3theme.verify.missingPanel panelId=\(panelId.uuidString.prefix(8)) attempt=\(attempt)")
+#endif
+                return
+            }
+
+            browserPanel.webView.evaluateJavaScript(T3CodeWebSupport.debugProbeScript) { result, error in
+                DispatchQueue.main.async {
+                    if let error {
+#if DEBUG
+                        dlog(
+                            "t3theme.verify.error panelId=\(panelId.uuidString.prefix(8)) " +
+                            "attempt=\(attempt) error=\(error.localizedDescription)"
+                        )
+#endif
+                        if attempt + 1 < T3CodeWebSupport.maxReadinessAttempts {
+                            Self.scheduleT3ThemeVerification(
+                                tabManager: tabManager,
+                                panelId: panelId,
+                                attempt: attempt + 1
+                            )
+                        } else {
+                            Self.autoDisableT3Theme(tabManager: tabManager, panelId: panelId, payload: nil)
+                        }
+                        return
+                    }
+
+                    let payload = T3CodeWebSupport.decodeThemeProbePayload(from: result)
+                    let payloadDescription = (result as? String) ?? "nil"
+#if DEBUG
+                    let tagSummary: String
+                        if let payload {
+                            let tagParts = [
+                                "composerShell:\(payload.composerShellTagged ? 1 : 0)",
+                                "composerEditor:\(payload.composerEditorTagged ? 1 : 0)",
+                                "headerBadge:\(payload.headerBadgeTaggedCount)",
+                                "toolbarClusters:\(payload.toolbarClusterTaggedCount)",
+                                "toolbarButtons:\(payload.toolbarButtonTaggedCount)",
+                                "userShells:\(payload.userShellTaggedCount)",
+                                "timestamps:\(payload.timestampTaggedCount)",
+                                "scroll:\(payload.scrollButtonTaggedCount)",
+                        ]
+                        tagSummary = " tags=" + tagParts.joined(separator: ",")
+                    } else {
+                        tagSummary = ""
+                    }
+                    dlog(
+                        "t3theme.verify panelId=\(panelId.uuidString.prefix(8)) " +
+                        "attempt=\(attempt)\(tagSummary) payload=\(payloadDescription)"
+                    )
+#endif
+
+                    let disposition = T3CodeWebSupport.readinessDisposition(
+                        from: payload,
+                        themeEnabled: themeEnabled
+                    )
+
+                    switch disposition {
+                    case .themeInstalledAndReady, .themeDisabled:
+                        return
+                    case .themeNotInstalledYet, .themeInstalledButMissingShell, .jsErrorDetectedBeforeReady:
+                        if attempt + 1 < T3CodeWebSupport.maxReadinessAttempts {
+                            Self.scheduleT3ThemeVerification(
+                                tabManager: tabManager,
+                                panelId: panelId,
+                                attempt: attempt + 1
+                            )
+                        } else {
+                            Self.autoDisableT3Theme(
+                                tabManager: tabManager,
+                                panelId: panelId,
+                                payload: payload
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static func autoDisableT3Theme(
+        tabManager: TabManager?,
+        panelId: UUID,
+        payload: T3CodeWebSupport.ThemeProbePayload?
+    ) {
+        guard let browserPanel = browserPanel(for: panelId, tabManager: tabManager) else { return }
+
+        let reason = T3CodeWebSupport.autoDisableReason(for: payload)
+        let url = browserPanel.currentURL?.absoluteString ?? browserPanel.webView.url?.absoluteString ?? "nil"
+
+#if DEBUG
+        let consoleTail = payload?.recentConsoleLog.joined(separator: " | ") ?? ""
+        let errorTail = payload?.recentErrorLog.joined(separator: " | ") ?? ""
+        dlog(
+            "t3theme.autodisable panelId=\(panelId.uuidString.prefix(8)) reason=\(reason) " +
+            "url=\(url) critical=\(payload?.critical == true ? 1 : 0) " +
+            "full=\(payload?.full == true ? 1 : 0) installed=\(payload?.installed == true ? 1 : 0) " +
+            "header=\(payload?.headerPresent == true ? 1 : 0) composer=\(payload?.composerPresent == true ? 1 : 0) " +
+            "main=\(payload?.mainPresent == true ? 1 : 0) interactive=\(payload?.interactiveElementCount ?? 0) " +
+            "tagComposerShell=\(payload?.composerShellTagged == true ? 1 : 0) " +
+            "tagComposerEditor=\(payload?.composerEditorTagged == true ? 1 : 0) " +
+            "tagHeaderBadge=\(payload?.headerBadgeTaggedCount ?? 0) " +
+            "tagToolbarClusters=\(payload?.toolbarClusterTaggedCount ?? 0) " +
+            "tagToolbarButtons=\(payload?.toolbarButtonTaggedCount ?? 0) " +
+            "tagUserShells=\(payload?.userShellTaggedCount ?? 0) " +
+            "tagTimestamps=\(payload?.timestampTaggedCount ?? 0) " +
+            "tagScroll=\(payload?.scrollButtonTaggedCount ?? 0) " +
+            "textLength=\(payload?.bodyTextLength ?? 0) console=\(consoleTail) errors=\(errorTail)"
+        )
+#endif
+
+        browserPanel.webView.evaluateJavaScript(T3CodeWebSupport.disableThemeScript(reason: reason)) { result, error in
+            DispatchQueue.main.async {
+#if DEBUG
+                if let error {
+                    dlog(
+                        "t3theme.autodisable.error panelId=\(panelId.uuidString.prefix(8)) " +
+                        "reason=\(reason) error=\(error.localizedDescription)"
+                    )
+                } else {
+                    dlog(
+                        "t3theme.autodisable.applied panelId=\(panelId.uuidString.prefix(8)) " +
+                        "reason=\(reason) payload=\((result as? String) ?? "nil")"
+                    )
+                }
+#endif
+            }
+        }
+    }
+
+    private static func browserPanel(for panelId: UUID, tabManager: TabManager?) -> BrowserPanel? {
+        guard let tabManager else { return nil }
+
+        for workspace in tabManager.tabs {
+            if let browserPanel = workspace.panels[panelId] as? BrowserPanel {
+                return browserPanel
+            }
+        }
+
+        return nil
     }
 
     private func focusBrowserAddressBar(in panel: BrowserPanel) {

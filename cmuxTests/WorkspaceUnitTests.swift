@@ -2476,6 +2476,139 @@ final class WorkspacePanelGitBranchTests: XCTestCase {
 }
 
 
+@MainActor
+final class WorkspaceContextBindingTests: XCTestCase {
+    func testWorkspaceCreatesSingleStructuralContextPanel() throws {
+        let workspace = Workspace()
+
+        let contextPanels = workspace.panels.values.compactMap { $0 as? ContextPanel }
+        XCTAssertEqual(contextPanels.count, 1)
+
+        let contextPanel = try XCTUnwrap(contextPanels.first)
+        XCTAssertTrue(workspace.isContextPanel(contextPanel.id))
+        XCTAssertEqual(workspace.panels.keys.filter(workspace.isContextPanel).count, 1)
+        XCTAssertEqual(workspace.panels.keys.filter(workspace.isAgentPanel).count, 1)
+    }
+
+    func testEnsureContextPanelExistsDoesNotCreateDuplicates() throws {
+        let workspace = Workspace()
+
+        let firstPanel = try XCTUnwrap(workspace.ensureContextPanelExists())
+        let secondPanel = try XCTUnwrap(workspace.ensureContextPanelExists())
+
+        XCTAssertEqual(firstPanel.id, secondPanel.id)
+        XCTAssertEqual(workspace.panels.keys.filter(workspace.isContextPanel).count, 1)
+    }
+
+    func testSelectedAgentPanelIgnoresFocusedContextPanel() throws {
+        let workspace = Workspace()
+        let initialAgentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+        let contextPanel = try XCTUnwrap(workspace.panels.values.compactMap { $0 as? ContextPanel }.first)
+
+        workspace.focusPanel(contextPanel.id)
+
+        XCTAssertEqual(workspace.focusedPanelId, contextPanel.id)
+        XCTAssertEqual(workspace.selectedAgentPanelId, initialAgentPanelId)
+    }
+
+    func testSelectingPlanCreatesDeterministicPlanBinding() throws {
+        let workspace = Workspace()
+        let agentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+
+        workspace.selectContextPage(forAgentPanelId: agentPanelId, kind: .plan)
+
+        let contextPanel = try XCTUnwrap(workspace.panels.values.compactMap { $0 as? ContextPanel }.first)
+        XCTAssertEqual(contextPanel.pageState.kind, .plan)
+
+        let resolvedPath = try XCTUnwrap(contextPanel.pageState.resolvedFilePath)
+        defer {
+            let workspaceDirectory = (((resolvedPath as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent)
+            try? FileManager.default.removeItem(atPath: workspaceDirectory)
+        }
+
+        XCTAssertTrue(
+            resolvedPath.hasSuffix("/\(workspace.id.uuidString)/\(agentPanelId.uuidString)/plan.md"),
+            "Expected bound plan path to be deterministic per workspace/panel"
+        )
+
+        let snapshot = workspace.sessionSnapshot(includeScrollback: false)
+        let binding = try XCTUnwrap(snapshot.contextBindings.first(where: { $0.agentPanelId == agentPanelId }))
+        XCTAssertEqual(binding.kindRawValue, ContextPageKind.plan.rawValue)
+        XCTAssertEqual(binding.planFilePath, resolvedPath)
+    }
+
+    func testSelectingAgentMdResolvesWorkspaceLocalFileAndKeepsMissingState() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-context-agent-md-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(workingDirectory: root.path)
+        let agentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+
+        workspace.selectContextPage(forAgentPanelId: agentPanelId, kind: .agentMd)
+
+        let contextPanel = try XCTUnwrap(workspace.panels.values.compactMap { $0 as? ContextPanel }.first)
+        let expectedPath = root.appendingPathComponent("AGENT.md").path
+
+        XCTAssertEqual(contextPanel.pageState.kind, .agentMd)
+        XCTAssertEqual(contextPanel.pageState.resolvedFilePath, expectedPath)
+        XCTAssertEqual(
+            contextPanel.pageState.missingReason,
+            String(localized: "contextPage.agentMd.missing", defaultValue: "No workspace-local AGENT.md file was found.")
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
+    }
+
+    func testFocusingDifferentAgentPanelsSwapsBoundContextPage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-context-focus-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(workingDirectory: root.path)
+        let firstAgentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+        let paneId = try XCTUnwrap(workspace.paneId(forPanelId: firstAgentPanelId))
+        let secondPanel = try XCTUnwrap(workspace.newTerminalSurface(inPane: paneId, focus: false))
+
+        workspace.selectContextPage(forAgentPanelId: firstAgentPanelId, kind: .plan)
+        workspace.selectContextPage(forAgentPanelId: secondPanel.id, kind: .agentMd)
+
+        let contextPanel = try XCTUnwrap(workspace.panels.values.compactMap { $0 as? ContextPanel }.first)
+
+        workspace.focusPanel(firstAgentPanelId)
+        XCTAssertEqual(contextPanel.pageState.kind, .plan)
+
+        workspace.focusPanel(secondPanel.id)
+        XCTAssertEqual(contextPanel.pageState.kind, .agentMd)
+    }
+
+    func testClosingAgentPanelRemovesOnlyItsBindingState() throws {
+        let workspace = Workspace()
+        let firstAgentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+        let paneId = try XCTUnwrap(workspace.paneId(forPanelId: firstAgentPanelId))
+        let secondPanel = try XCTUnwrap(workspace.newTerminalSurface(inPane: paneId, focus: false))
+
+        workspace.selectContextPage(forAgentPanelId: firstAgentPanelId, kind: .plan)
+        workspace.selectContextPage(forAgentPanelId: secondPanel.id, kind: .agentMd)
+
+        XCTAssertTrue(workspace.closePanel(secondPanel.id, force: true))
+
+        let snapshot = workspace.sessionSnapshot(includeScrollback: false)
+        XCTAssertNotNil(snapshot.contextBindings.first(where: { $0.agentPanelId == firstAgentPanelId }))
+        XCTAssertNil(snapshot.contextBindings.first(where: { $0.agentPanelId == secondPanel.id }))
+    }
+
+    func testClosingStructuralContextPanelIsRejected() throws {
+        let workspace = Workspace()
+        let contextPanel = try XCTUnwrap(workspace.panels.values.compactMap { $0 as? ContextPanel }.first)
+
+        XCTAssertFalse(workspace.closePanel(contextPanel.id, force: true))
+        XCTAssertNotNil(workspace.panels[contextPanel.id])
+    }
+}
+
+
 final class WorkspaceMountPolicyTests: XCTestCase {
     func testDefaultPolicyMountsOnlySelectedWorkspace() {
         let a = UUID()

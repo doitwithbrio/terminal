@@ -3,11 +3,14 @@ import Combine
 import Foundation
 import WebKit
 
-/// A panel that displays the T3 Code AI agent interface in a WKWebView.
+/// Legacy/fallback panel that displays the T3 Code web client in a WKWebView.
 ///
 /// T3 Code is an open-source GUI for AI coding agents (Claude Code, Codex, etc.).
 /// The frontend is a React SPA loaded from the app bundle or served by the
 /// bundled T3 Code backend server. Communication with the backend uses WebSocket RPC.
+///
+/// The normal user-visible T3 runtime uses a chromeless `BrowserPanel`.
+/// This class remains as a fallback/legacy path and shares the same theme helper.
 ///
 /// Lifecycle:
 ///   1. On init, registers with `T3ServerManager` to ensure the backend is running.
@@ -210,10 +213,11 @@ final class T3CodePanel: Panel, ObservableObject {
 
         // Fallback: Load bundled static assets directly
         if let bundleURL = Bundle.main.resourceURL {
-            let webDir = bundleURL.appendingPathComponent("t3code-web")
-            let indexHTML = webDir.appendingPathComponent("index.html")
+            let clientDir = T3CodeWebSupport.bundledClientDirectory(bundleURL: bundleURL)
+            let indexHTML = clientDir.appendingPathComponent("index.html")
             if FileManager.default.fileExists(atPath: indexHTML.path) {
-                webView.loadFileURL(indexHTML, allowingReadAccessTo: webDir)
+                configureUserScripts(wsURL: nil)
+                webView.loadFileURL(indexHTML, allowingReadAccessTo: clientDir)
                 return
             }
         }
@@ -258,9 +262,9 @@ final class T3CodePanel: Panel, ObservableObject {
                 <h2>T3 Code Not Bundled</h2>
                 <p>
                     T3 Code assets are not yet included in this build.
-                    The server and frontend need to be built and placed in
-                    <code>Resources/t3code-server/</code> and
-                    <code>Resources/t3code-web/</code>.
+                    The server and bundled client need to be built and placed in
+                    <code>Resources/t3code-server/</code>, including
+                    <code>Resources/t3code-server/client/</code>.
                 </p>
             </div>
         </body>
@@ -276,14 +280,7 @@ final class T3CodePanel: Panel, ObservableObject {
 
         NSLog("[T3CodePanel] Loading frontend from \(serverURL) wsURL=\(wsURL)")
 
-        // Inject the bridge script dynamically now that we know the WebSocket URL
-        let bridgeSource = T3CodeBridgeScript.bridgeScript(wsURL: wsURL)
-        let bridgeUserScript = WKUserScript(
-            source: bridgeSource,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        )
-        webView.configuration.userContentController.addUserScript(bridgeUserScript)
+        configureUserScripts(wsURL: wsURL)
 
         // Load the server URL
         let request = URLRequest(url: serverURL)
@@ -317,6 +314,31 @@ final class T3CodePanel: Panel, ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    private func configureUserScripts(wsURL: String?) {
+        let userContentController = webView.configuration.userContentController
+        userContentController.removeAllUserScripts()
+
+        if let wsURL {
+            let bridgeSource = T3CodeBridgeScript.bridgeScript(wsURL: wsURL)
+            let bridgeUserScript = WKUserScript(
+                source: bridgeSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            userContentController.addUserScript(bridgeUserScript)
+        }
+
+        let themeScripts = T3CodeWebSupport.makeInitialUserScripts()
+        guard !themeScripts.isEmpty else {
+            NSLog("[T3CodePanel] Ernest theme stylesheet missing; continuing without host theme overrides")
+            return
+        }
+
+        for script in themeScripts {
+            userContentController.addUserScript(script)
         }
     }
 

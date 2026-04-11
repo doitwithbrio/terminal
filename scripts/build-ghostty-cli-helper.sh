@@ -16,6 +16,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GHOSTTY_DIR="$REPO_ROOT/ghostty"
+INSTALLED_GHOSTTY_APP_BIN="/Applications/Ghostty.app/Contents/MacOS/ghostty"
 
 OUTPUT_PATH=""
 TARGET_TRIPLE=""
@@ -100,6 +101,34 @@ if [[ ! -f "$GHOSTTY_DIR/build.zig" ]]; then
   exit 1
 fi
 
+install_fallback_helper() {
+  local target="${1:-}"
+
+  if [[ ! -x "$INSTALLED_GHOSTTY_APP_BIN" ]]; then
+    return 1
+  fi
+
+  echo "warning: zig Ghostty CLI helper build failed; falling back to installed Ghostty.app binary" >&2
+  mkdir -p "$(dirname "$OUTPUT_PATH")"
+
+  case "$target" in
+    aarch64-macos)
+      /usr/bin/lipo "$INSTALLED_GHOSTTY_APP_BIN" -thin arm64 -output "$OUTPUT_PATH"
+      ;;
+    x86_64-macos)
+      /usr/bin/lipo "$INSTALLED_GHOSTTY_APP_BIN" -thin x86_64 -output "$OUTPUT_PATH"
+      ;;
+    "")
+      install -m 755 "$INSTALLED_GHOSTTY_APP_BIN" "$OUTPUT_PATH"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  chmod +x "$OUTPUT_PATH"
+}
+
 build_helper() {
   local prefix="$1"
   local target="${2:-}"
@@ -135,14 +164,20 @@ if [[ "$UNIVERSAL" == "true" ]]; then
   ZIG_ARCH="$(file "$(command -v zig)" 2>/dev/null | grep -oE '(arm64|x86_64)' | head -1)"
   # Use native compilation for the matching arch to avoid cross-linker issues
   if [[ "$ZIG_ARCH" == "arm64" ]]; then
-    build_helper "$ARM64_PREFIX" ""
-    build_helper "$X86_PREFIX" "x86_64-macos"
+    if ! build_helper "$ARM64_PREFIX" "" || ! build_helper "$X86_PREFIX" "x86_64-macos"; then
+      install_fallback_helper "" || exit 1
+      exit 0
+    fi
   elif [[ "$ZIG_ARCH" == "x86_64" ]]; then
-    build_helper "$ARM64_PREFIX" "aarch64-macos"
-    build_helper "$X86_PREFIX" ""
+    if ! build_helper "$ARM64_PREFIX" "aarch64-macos" || ! build_helper "$X86_PREFIX" ""; then
+      install_fallback_helper "" || exit 1
+      exit 0
+    fi
   else
-    build_helper "$ARM64_PREFIX" "aarch64-macos"
-    build_helper "$X86_PREFIX" "x86_64-macos"
+    if ! build_helper "$ARM64_PREFIX" "aarch64-macos" || ! build_helper "$X86_PREFIX" "x86_64-macos"; then
+      install_fallback_helper "" || exit 1
+      exit 0
+    fi
   fi
   /usr/bin/lipo -create \
     "$ARM64_PREFIX/bin/ghostty" \
@@ -150,8 +185,11 @@ if [[ "$UNIVERSAL" == "true" ]]; then
     -output "$OUTPUT_PATH"
 else
   SINGLE_PREFIX="$TMP_DIR/single"
-  build_helper "$SINGLE_PREFIX" "$TARGET_TRIPLE"
-  install -m 755 "$SINGLE_PREFIX/bin/ghostty" "$OUTPUT_PATH"
+  if build_helper "$SINGLE_PREFIX" "$TARGET_TRIPLE"; then
+    install -m 755 "$SINGLE_PREFIX/bin/ghostty" "$OUTPUT_PATH"
+  else
+    install_fallback_helper "$TARGET_TRIPLE" || exit 1
+  fi
 fi
 
 chmod +x "$OUTPUT_PATH"

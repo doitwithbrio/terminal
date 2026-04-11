@@ -483,14 +483,14 @@ extension Workspace {
     private func sessionPanelSnapshot(panelId: UUID, includeScrollback: Bool) -> SessionPanelSnapshot? {
         guard let panel = panels[panelId] else { return nil }
 
-        // Skip chromeless browser panels (T3 Code) entirely from session persistence.
+        // Skip chromeless browser panels (the real user-visible T3 path) from session persistence.
         // Their localhost URLs are ephemeral and restoring them causes portal z-ordering
         // issues that block the terminal. User re-opens with ⌘⇧K.
         if let browserPanel = panel as? BrowserPanel, browserPanel.isChromeless {
             return nil
         }
 
-        // Also skip t3code panel type (legacy, shouldn't occur but safety check)
+        // Also skip the legacy T3CodePanel type as a safety check.
         if panel.panelType == .t3code {
             return nil
         }
@@ -6530,8 +6530,21 @@ final class Workspace: Identifiable, ObservableObject {
         case .agentMd:
             let rootDirectory = currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
             let baseDirectory = rootDirectory.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : rootDirectory
-            let path = (baseDirectory as NSString).appendingPathComponent("AGENT.md")
-            let exists = FileManager.default.fileExists(atPath: path)
+            // Check AGENT.md first, fall back to AGENTS.md (common convention)
+            let primaryPath = (baseDirectory as NSString).appendingPathComponent("AGENT.md")
+            let fallbackPath = (baseDirectory as NSString).appendingPathComponent("AGENTS.md")
+            let path: String
+            let exists: Bool
+            if FileManager.default.fileExists(atPath: primaryPath) {
+                path = primaryPath
+                exists = true
+            } else if FileManager.default.fileExists(atPath: fallbackPath) {
+                path = fallbackPath
+                exists = true
+            } else {
+                path = primaryPath
+                exists = false
+            }
             return ContextPageState(
                 kind: .agentMd,
                 resolvedFilePath: path,
@@ -6572,6 +6585,12 @@ final class Workspace: Identifiable, ObservableObject {
         contextPanel.onSelectPageKind = { [weak self] kind in
             guard let self, let agentPanelId = self.selectedAgentPanelId else { return }
             self.selectContextPage(forAgentPanelId: agentPanelId, kind: kind)
+        }
+        contextPanel.onOpenFile = { [weak self] filePath in
+            guard let self,
+                  let paneId = self.bonsplitController.focusedPaneId ?? self.bonsplitController.allPaneIds.first
+            else { return }
+            self.newMarkdownSurface(inPane: paneId, filePath: filePath, focus: true)
         }
         guard let agentPanelId = selectedAgentPanelId else {
             contextPanel.setPageState(.blank)
@@ -6646,6 +6665,17 @@ final class Workspace: Identifiable, ObservableObject {
                 splitPanelId: contextPanel.id,
                 previousHostedView: previousHostedView
             )
+        }
+
+        // Register custom tab bar — three fixed tabs replace the Bonsplit "Context" tab.
+        if let contextPaneId = self.paneId(forPanelId: contextPanel.id) {
+            let panel = contextPanel
+            bonsplitController.setCustomTabBar(for: contextPaneId) { [weak self] in
+                AnyView(ContextPaneTabBar(panel: panel, onSelect: { kind in
+                    guard let self, let agentPanelId = self.selectedAgentPanelId else { return }
+                    self.selectContextPage(forAgentPanelId: agentPanelId, kind: kind)
+                }))
+            }
         }
 
         installContextPanelSubscription(contextPanel)
@@ -8358,7 +8388,8 @@ final class Workspace: Identifiable, ObservableObject {
         preferredProfileID: UUID? = nil,
         bypassInsecureHTTPHostOnce: String? = nil,
         initialUserScripts: [WKUserScript] = [],
-        chromeless: Bool = false
+        chromeless: Bool = false,
+        initialTitle: String? = nil
     ) -> BrowserPanel? {
         let shouldFocusNewTab = focus ?? (bonsplitController.focusedPaneId == paneId)
         let sourcePanelId = effectiveSelectedPanelId(inPane: paneId)
@@ -8380,10 +8411,16 @@ final class Workspace: Identifiable, ObservableObject {
             chromeless: chromeless
         )
         panels[browserPanel.id] = browserPanel
-        panelTitles[browserPanel.id] = browserPanel.displayTitle
+        let resolvedInitialTitle = initialTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveTitle = (resolvedInitialTitle?.isEmpty == false ? resolvedInitialTitle : nil) ?? browserPanel.displayTitle
+        panelTitles[browserPanel.id] = effectiveTitle
+        // Set as custom title so it survives pageTitle updates from the web content
+        if let resolvedInitialTitle, !resolvedInitialTitle.isEmpty {
+            panelCustomTitles[browserPanel.id] = resolvedInitialTitle
+        }
 
         guard let newTabId = bonsplitController.createTab(
-            title: browserPanel.displayTitle,
+            title: effectiveTitle,
             icon: browserPanel.displayIcon,
             kind: SurfaceKind.browser,
             isDirty: browserPanel.isDirty,

@@ -10,7 +10,7 @@ struct ContextPagePickerView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .top) {
-                Color.black.opacity(0.25)
+                Color.black.opacity(0.14)
                     .allowsHitTesting(false)
 
                 Color.clear
@@ -25,7 +25,7 @@ struct ContextPagePickerView: View {
                     itemList
                     footer
                 }
-                .frame(width: min(420, geometry.size.width - 48))
+                .frame(width: min(440, geometry.size.width - 48))
                 .designPanel()
                 .padding(.top, 56)
             }
@@ -34,58 +34,74 @@ struct ContextPagePickerView: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(String(localized: "contextPagePicker.eyebrow", defaultValue: "Context"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+
+            VStack(alignment: .leading, spacing: 5) {
                 Text(String(localized: "contextPagePicker.title", defaultValue: "Context Pages"))
-                    .font(.system(size: 14, weight: .semibold))
-                Text(String(localized: "contextPagePicker.subtitle", defaultValue: "Choose what the right context pane should show"))
-                    .font(.system(size: 11))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+                Text(String(localized: "contextPagePicker.subtitle", defaultValue: "Switch the paired context page for the active tab."))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
             }
-            Spacer()
         }
-        .padding(.horizontal, DesignSystem.Primitive.Space.md)
-        .padding(.top, DesignSystem.Primitive.Space.md)
-        .padding(.bottom, DesignSystem.Primitive.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 10)
     }
 
     private var itemList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: DesignSystem.Primitive.Space.xs) {
+                VStack(spacing: 8) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         Button {
                             onActivateItem(index)
                         } label: {
-                            HStack(spacing: DesignSystem.Primitive.Space.sm) {
-                                Text("\(index + 1)")
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
-                                    .frame(width: 18, alignment: .center)
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(iconTileFill(isSelected: index == selectedIndex, isHovered: hoveredIndex == index))
+                                    Image(systemName: item.icon)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+                                }
+                                .frame(width: 34, height: 34)
 
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: 3) {
                                     Text(item.title)
-                                        .font(DesignSystem.Typography.rowTitle)
+                                        .font(.system(size: 13, weight: .semibold))
                                         .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
                                     if let subtitle = item.subtitle {
                                         Text(subtitle)
-                                            .font(DesignSystem.Typography.rowSubtitle)
+                                            .font(.system(size: 11))
                                             .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
                                             .lineLimit(2)
                                     }
                                 }
 
                                 Spacer()
+
+                                pickerKeycapLabel("\(index + 1)")
                             }
-                            .padding(.horizontal, DesignSystem.Primitive.Space.sm)
-                            .padding(.vertical, DesignSystem.Metrics.sidebarRowPaddingY)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 13)
                             .background(
                                 RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous)
-                                    .fill(index == selectedIndex
-                                        ? DesignSystem.Color.sidebarRowSelectedFill.dsColor
-                                        : (hoveredIndex == index
-                                            ? DesignSystem.Color.quietControlHoverFill.dsColor
-                                            : Color.clear))
+                                    .fill(rowFill(isSelected: index == selectedIndex, isHovered: hoveredIndex == index))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous)
+                                    .stroke(
+                                        index == selectedIndex
+                                            ? DesignSystem.Color.sidebarActiveBorder.dsColor
+                                            : DesignSystem.Color.panelBorder.dsColor,
+                                        lineWidth: DesignSystem.Primitive.Border.hairline
+                                    )
                             )
                             .contentShape(Rectangle())
                         }
@@ -96,13 +112,13 @@ struct ContextPagePickerView: View {
                         .id(index)
                     }
                 }
-                .padding(.horizontal, DesignSystem.Primitive.Space.md)
-                .padding(.vertical, DesignSystem.Primitive.Space.xs)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
             }
-            .frame(maxHeight: 220)
-            .onChange(of: selectedIndex) { newIndex in
+            .frame(maxHeight: 240)
+            .onChange(of: selectedIndex) {
                 withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo(newIndex, anchor: .center)
+                    proxy.scrollTo(selectedIndex, anchor: .center)
                 }
             }
         }
@@ -115,17 +131,50 @@ struct ContextPagePickerView: View {
             hintLabel("↩", String(localized: "contextPagePicker.hint.open", defaultValue: "Open"))
             hintLabel("esc", String(localized: "contextPagePicker.hint.close", defaultValue: "Close"))
         }
-        .padding(.horizontal, DesignSystem.Primitive.Space.md)
-        .padding(.vertical, DesignSystem.Primitive.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 16)
     }
 
     private func hintLabel(_ key: String, _ label: String) -> some View {
         HStack(spacing: 3) {
-            Text(key)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+            pickerKeycapLabel(key)
             Text(label)
                 .font(.system(size: 10))
         }
         .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+    }
+
+    private func pickerKeycapLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(DesignSystem.Color.quietControlFill.dsColor)
+            )
+    }
+
+    private func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
+        if isSelected {
+            return DesignSystem.Color.sidebarRowSelectedFill.dsColor
+        }
+        if isHovered {
+            return DesignSystem.Color.quietControlHoverFill.dsColor
+        }
+        return Color.clear
+    }
+
+    private func iconTileFill(isSelected: Bool, isHovered: Bool) -> Color {
+        if isSelected {
+            return DesignSystem.Color.panelSurface.dsColor
+        }
+        if isHovered {
+            return DesignSystem.Color.panelSurface.dsColor
+        }
+        return DesignSystem.Color.quietControlFill.dsColor
     }
 }

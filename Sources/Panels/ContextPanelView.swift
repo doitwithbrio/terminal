@@ -9,18 +9,22 @@ struct ContextPanelView: View {
     let portalPriority: Int
     let onRequestPanelFocus: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
     @State private var focusFlashOpacity: Double = 0
     @State private var focusFlashAnimationGeneration: Int = 0
+    @State private var hoveredRowIdentifier: String?
+    @State private var hoveredControlIdentifier: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            if panel.pageState.kind != .blank,
+               !panel.isFileUnavailable,
+               let path = panel.pageState.resolvedFilePath, !path.isEmpty {
+                contextHeaderBar(kind: panel.pageState.kind, filePath: path)
+            }
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(backgroundColor)
+        .background(DesignSystem.Color.panelSurface.dsColor)
         .overlay {
             RoundedRectangle(cornerRadius: FocusFlashPattern.ringCornerRadius)
                 .stroke(cmuxAccentColor().opacity(focusFlashOpacity), lineWidth: 3)
@@ -33,44 +37,70 @@ struct ContextPanelView: View {
                 ContextPointerObserver(onPointerDown: onRequestPanelFocus)
             }
         }
-        .onChange(of: panel.focusFlashToken) { _ in
+        .onChange(of: panel.focusFlashToken) {
             triggerFocusFlashAnimation()
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text(String(localized: "contextPanel.header.title", defaultValue: "Context"))
+    // The three fixed tabs are rendered by ContextPaneTabBar
+    // in the Bonsplit tab bar position via BonsplitController.setCustomTabBar().
+
+    // MARK: - T3-style action bar
+
+    private func contextHeaderBar(kind: ContextPageKind, filePath: String) -> some View {
+        HStack(spacing: DesignSystem.Primitive.Space.sm) {
+            Image(systemName: kind.systemImage)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
+                .foregroundStyle(Color(nsColor: NSColor(white: 0.04, alpha: 0.72)))
+            Text(kind.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(nsColor: NSColor(red: 9 / 255, green: 9 / 255, blue: 11 / 255, alpha: 1)))
+                .tracking(-0.28)
 
             Spacer(minLength: 0)
 
-            Menu {
-                ForEach(ContextPageKind.allCases, id: \.self) { kind in
-                    Button(kind.title) {
-                        panel.onSelectPageKind?(kind)
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(panel.pageState.kind.title)
-                        .font(.system(size: 12, weight: .medium))
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(DesignSystem.Color.quietControlHoverFill.dsColor)
-                )
+            headerButton(
+                id: "edit",
+                icon: panel.isEditing ? "eye" : "pencil",
+                tooltip: panel.isEditing
+                    ? String(localized: "contextHeader.viewRendered", defaultValue: "View Rendered")
+                    : String(localized: "contextHeader.edit", defaultValue: "Edit")
+            ) {
+                panel.toggleEditing()
             }
-            .menuStyle(.borderlessButton)
-            .buttonStyle(.plain)
+            headerButton(id: "reveal", icon: "folder", tooltip: String(localized: "contextHeader.reveal", defaultValue: "Reveal in Finder")) {
+                NSWorkspace.shared.selectFile(filePath, inFileViewerRootedAtPath: "")
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, DesignSystem.Primitive.Space.md)
+        .frame(height: 44)
+        .background(Color(nsColor: NSColor(white: 1.0, alpha: 0.96)))
+    }
+
+    private func headerButton(id: String, icon: String, tooltip: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(
+                    hoveredControlIdentifier == id
+                        ? Color(nsColor: NSColor(red: 9 / 255, green: 9 / 255, blue: 11 / 255, alpha: 1))
+                        : Color(nsColor: NSColor(red: 9 / 255, green: 9 / 255, blue: 11 / 255, alpha: 0.72))
+                )
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            hoveredControlIdentifier == id
+                                ? Color(nsColor: NSColor(red: 200 / 255, green: 218 / 255, blue: 206 / 255, alpha: 1))
+                                : Color(nsColor: NSColor(red: 220 / 255, green: 232 / 255, blue: 223 / 255, alpha: 1))
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+        .onHover { hovering in
+            hoveredControlIdentifier = hovering ? id : nil
+        }
     }
 
     @ViewBuilder
@@ -88,132 +118,301 @@ struct ContextPanelView: View {
     }
 
     private var blankState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "sidebar.right")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundColor(.secondary)
-            Text(String(localized: "contextPanel.blank.title", defaultValue: "No context page selected"))
-                .font(.headline)
-            Text(String(localized: "contextPanel.blank.message", defaultValue: "Use Shift-Command-N here or the selector above to open AGENT.md or the bound plan page."))
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-            HStack(spacing: 10) {
-                Button("AGENT.md") {
-                    panel.onSelectPageKind?(.agentMd)
+        ScrollView {
+            contentColumn {
+                stateEyebrow(String(localized: "contextPanel.blank.eyebrow", defaultValue: "No page selected"))
+
+                Text(String(localized: "contextPanel.blank.title", defaultValue: "Choose what this tab should remember"))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+
+                Text(String(localized: "contextPanel.blank.message", defaultValue: "Pin instructions or a plan alongside the active tab."))
+                    .font(.system(size: 13))
+                    .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: DesignSystem.Primitive.Space.sm) {
+                    pageChoiceRow(for: .agentMd, titleOverride: "AGENT.md")
+                    pageChoiceRow(for: .plan)
                 }
-                Button(String(localized: "contextPanel.blank.openPlan", defaultValue: "Open Plan")) {
-                    panel.onSelectPageKind?(.plan)
-                }
+                .padding(.top, DesignSystem.Primitive.Space.xs)
             }
-            .buttonStyle(.borderedProminent)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
     }
 
     private var missingFileState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "doc.questionmark")
-                .font(.system(size: 36))
-                .foregroundColor(.secondary)
-            Text(String(localized: "contextPanel.fileUnavailable.title", defaultValue: "File unavailable"))
-                .font(.headline)
-            if let path = panel.pageState.resolvedFilePath, !path.isEmpty {
-                Text(path)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 24)
-            }
-            Text(panel.pageState.missingReason ?? String(localized: "contextPanel.fileUnavailable.message", defaultValue: "The selected markdown file is missing or unreadable."))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var markdownContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if let path = panel.pageState.resolvedFilePath, !path.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "doc.richtext")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 12))
-                        Text(path)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
+            contentColumn {
+                stateEyebrow(String(localized: "contextPanel.fileUnavailable.eyebrow", defaultValue: "Unavailable"))
 
-                    Divider()
-                        .padding(.horizontal, 16)
+                Text(String(localized: "contextPanel.fileUnavailable.title", defaultValue: "This context file can’t be shown"))
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+
+                Text(panel.pageState.missingReason ?? String(localized: "contextPanel.fileUnavailable.message", defaultValue: "The selected markdown file is missing or unreadable."))
+                    .font(.system(size: 13))
+                    .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let path = panel.pageState.resolvedFilePath, !path.isEmpty {
+                    documentMetaCard(
+                        icon: "doc.text",
+                        title: String(localized: "contextPanel.fileUnavailable.pathTitle", defaultValue: "Expected file"),
+                        subtitle: path
+                    )
                 }
 
-                Markdown(panel.content)
-                    .markdownTheme(markdownTheme)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 16)
+                HStack(spacing: 10) {
+                    quietActionButton(
+                        id: "show-start-page",
+                        title: String(localized: "contextPanel.fileUnavailable.showStartPage", defaultValue: "Show Start Page"),
+                        icon: ContextPageKind.blank.systemImage
+                    ) {
+                        panel.onSelectPageKind?(.blank)
+                    }
+
+                    if panel.pageState.kind == .agentMd {
+                        quietActionButton(
+                            id: "open-plan",
+                            title: String(localized: "contextPanel.fileUnavailable.openPlan", defaultValue: "Open Plan"),
+                            icon: ContextPageKind.plan.systemImage
+                        ) {
+                            panel.onSelectPageKind?(.plan)
+                        }
+                    } else {
+                        quietActionButton(
+                            id: "retry-plan",
+                            title: String(localized: "contextPanel.fileUnavailable.retryPlan", defaultValue: "Try Plan Again"),
+                            icon: "arrow.clockwise"
+                        ) {
+                            panel.onSelectPageKind?(.plan)
+                        }
+                    }
+                }
             }
         }
     }
 
-    private var backgroundColor: Color {
-        colorScheme == .dark
-            ? Color(nsColor: NSColor(white: 0.12, alpha: 1.0))
-            : Color(nsColor: NSColor(white: 0.98, alpha: 1.0))
+    @ViewBuilder
+    private var markdownContent: some View {
+        if panel.isEditing {
+            MilkdownEditorView(
+                initialContent: panel.content,
+                onContentChanged: { newContent in
+                    panel.debouncedSave(newContent)
+                }
+            )
+        } else {
+            ScrollView {
+                contentColumn(spacing: DesignSystem.Primitive.Space.lg) {
+                    Markdown(panel.content)
+                        .markdownTheme(contextMarkdownTheme)
+                        .textSelection(.enabled)
+                }
+            }
+        }
     }
 
-    private var markdownTheme: Theme {
-        let isDark = colorScheme == .dark
-        return Theme()
+    private func contentColumn<Content: View>(
+        spacing: CGFloat = DesignSystem.Primitive.Space.lg,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: spacing) {
+            content()
+        }
+        .frame(maxWidth: 620, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, DesignSystem.Primitive.Space.sm)
+        .padding(.bottom, 24)
+    }
+
+    private func stateEyebrow(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+            .textCase(.uppercase)
+            .tracking(0.5)
+    }
+
+    private func pageChoiceRow(
+        for kind: ContextPageKind,
+        titleOverride: String? = nil
+    ) -> some View {
+        Button {
+            panel.onSelectPageKind?(kind)
+        } label: {
+            HStack(spacing: DesignSystem.Primitive.Space.md) {
+                leadingIconTile(systemImage: kind.systemImage, isSelected: false, isHovered: hoveredRowIdentifier == kind.rawValue)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(titleOverride ?? kind.title)
+                        .font(DesignSystem.Typography.rowTitle)
+                        .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+                    Text(kind.subtitle)
+                        .font(DesignSystem.Typography.rowSubtitle)
+                        .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.control, style: .continuous)
+                    .fill(rowFill(identifier: kind.rawValue))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.control, style: .continuous)
+                    .stroke(DesignSystem.Color.panelBorder.dsColor, lineWidth: DesignSystem.Primitive.Border.hairline)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredRowIdentifier = hovering ? kind.rawValue : nil
+        }
+    }
+
+    private func quietActionButton(
+        id: String,
+        title: String,
+        icon: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: DesignSystem.Primitive.Space.sm) {
+                Image(systemName: icon)
+                    .font(DesignSystem.Typography.iconButton)
+                Text(title)
+                    .font(DesignSystem.Typography.primaryButton)
+            }
+            .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+            .padding(.horizontal, DesignSystem.Primitive.Space.md)
+            .padding(.vertical, DesignSystem.Primitive.Space.sm)
+            .background(
+                RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.control, style: .continuous)
+                    .fill(controlFill(identifier: id))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredControlIdentifier = hovering ? id : nil
+        }
+    }
+
+    private func documentMetaCard(icon: String, title: String, subtitle: String) -> some View {
+        HStack(alignment: .top, spacing: DesignSystem.Primitive.Space.md) {
+            leadingIconTile(systemImage: icon, isSelected: false, isHovered: false)
+
+            VStack(alignment: .leading, spacing: DesignSystem.Primitive.Space.xs) {
+                Text(title)
+                    .font(DesignSystem.Typography.primaryButton)
+                    .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+                Text(subtitle)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(DesignSystem.Color.textSecondary.dsColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(DesignSystem.Primitive.Space.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous)
+                .fill(DesignSystem.Color.sidebarRowSelectedFill.dsColor)
+        )
+    }
+
+    private func leadingIconTile(systemImage: String, isSelected: Bool, isHovered: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(iconTileFill(isSelected: isSelected, isHovered: isHovered))
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DesignSystem.Color.textPrimary.dsColor)
+        }
+        .frame(width: 34, height: 34)
+    }
+
+    private func rowFill(identifier: String) -> Color {
+        hoveredRowIdentifier == identifier
+            ? Color(nsColor: DesignSystem.Primitive.Color.selectionTint.blended(withFraction: 0.08, of: .black) ?? DesignSystem.Primitive.Color.selectionTint)
+            : DesignSystem.Color.sidebarRowSelectedFill.dsColor
+    }
+
+    private func controlFill(identifier: String) -> Color {
+        hoveredControlIdentifier == identifier
+            ? Color(nsColor: DesignSystem.Primitive.Color.selectionTint.blended(withFraction: 0.08, of: .black) ?? DesignSystem.Primitive.Color.selectionTint)
+            : DesignSystem.Color.sidebarRowSelectedFill.dsColor
+    }
+
+    private func iconTileFill(isSelected: Bool, isHovered: Bool) -> Color {
+        if isSelected || isHovered {
+            return DesignSystem.Color.panelSurface.dsColor
+        }
+        return DesignSystem.Color.sidebarRowSelectedFill.dsColor
+    }
+
+    private var contextMarkdownTheme: Theme {
+        Theme()
             .text {
-                ForegroundColor(isDark ? .white.opacity(0.9) : .primary)
-                FontSize(14)
+                ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
+                FontSize(13)
             }
             .heading1 { configuration in
-                VStack(alignment: .leading, spacing: 8) {
-                    configuration.label
-                        .markdownTextStyle {
-                            FontWeight(.bold)
-                            FontSize(28)
-                            ForegroundColor(isDark ? .white : .primary)
-                        }
-                    Divider()
-                }
-                .markdownMargin(top: 24, bottom: 16)
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.semibold)
+                        FontSize(22)
+                        ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
+                    }
+                    .markdownMargin(top: 0, bottom: 12)
             }
             .heading2 { configuration in
-                VStack(alignment: .leading, spacing: 6) {
-                    configuration.label
-                        .markdownTextStyle {
-                            FontWeight(.bold)
-                            FontSize(22)
-                            ForegroundColor(isDark ? .white : .primary)
-                        }
-                    Divider()
-                }
-                .markdownMargin(top: 20, bottom: 12)
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.semibold)
+                        FontSize(18)
+                        ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
+                    }
+                    .markdownMargin(top: 18, bottom: 8)
             }
             .heading3 { configuration in
                 configuration.label
                     .markdownTextStyle {
                         FontWeight(.semibold)
-                        FontSize(18)
-                        ForegroundColor(isDark ? .white : .primary)
+                        FontSize(15)
+                        ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
                     }
-                    .markdownMargin(top: 16, bottom: 8)
+                    .markdownMargin(top: 12, bottom: 8)
+            }
+            .heading4 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.semibold)
+                        FontSize(13)
+                        ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
+                    }
+                    .markdownMargin(top: 12, bottom: 4)
+            }
+            .paragraph { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontSize(13)
+                        ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
+                    }
+                    .markdownMargin(top: 0, bottom: 12)
+            }
+            .code {
+                FontFamilyVariant(.monospaced)
+                FontSize(13)
+                ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
+                BackgroundColor(DesignSystem.Color.primaryActionFill.dsColor.opacity(0.07))
             }
             .codeBlock { configuration in
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -221,51 +420,52 @@ struct ContextPanelView: View {
                         .markdownTextStyle {
                             FontFamilyVariant(.monospaced)
                             FontSize(13)
-                            ForegroundColor(isDark ? Color(red: 0.9, green: 0.9, blue: 0.9) : Color(red: 0.2, green: 0.2, blue: 0.2))
+                            ForegroundColor(DesignSystem.Color.textPrimary.dsColor)
                         }
-                        .padding(12)
+                        .padding(DesignSystem.Primitive.Space.md)
                 }
-                .background(isDark
-                    ? Color(nsColor: NSColor(white: 0.08, alpha: 1.0))
-                    : Color(nsColor: NSColor(white: 0.93, alpha: 1.0)))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .markdownMargin(top: 8, bottom: 8)
-            }
-            .code {
-                FontFamilyVariant(.monospaced)
-                FontSize(13)
-                ForegroundColor(isDark ? Color(red: 0.85, green: 0.6, blue: 0.95) : Color(red: 0.6, green: 0.2, blue: 0.7))
-                BackgroundColor(isDark
-                    ? Color(nsColor: NSColor(white: 0.18, alpha: 1.0))
-                    : Color(nsColor: NSColor(white: 0.92, alpha: 1.0)))
+                .background(DesignSystem.Color.primaryActionFill.dsColor.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.row, style: .continuous))
+                .markdownMargin(top: 8, bottom: 12)
             }
             .blockquote { configuration in
                 HStack(spacing: 0) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(isDark ? Color.white.opacity(0.2) : Color.gray.opacity(0.4))
-                        .frame(width: 3)
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(DesignSystem.Color.primaryActionFill.dsColor.opacity(0.14))
+                        .frame(width: 4)
                     configuration.label
                         .markdownTextStyle {
-                            ForegroundColor(isDark ? .white.opacity(0.6) : .secondary)
-                            FontSize(14)
+                            FontSize(13)
+                            ForegroundColor(DesignSystem.Color.textSecondary.dsColor)
                         }
-                        .padding(.leading, 12)
+                        .padding(.leading, DesignSystem.Primitive.Space.md)
                 }
-                .markdownMargin(top: 8, bottom: 8)
+                .markdownMargin(top: 8, bottom: 12)
             }
             .link {
-                ForegroundColor(Color.accentColor)
+                ForegroundColor(DesignSystem.Color.primaryActionFill.dsColor)
             }
             .strong {
                 FontWeight(.semibold)
             }
-            .paragraph { configuration in
+            .listItem { configuration in
                 configuration.label
-                    .markdownTextStyle {
-                        FontSize(14)
-                        ForegroundColor(isDark ? .white.opacity(0.9) : .primary)
-                    }
-                    .markdownMargin(top: 0, bottom: 12)
+                    .markdownMargin(top: 4, bottom: 4)
+            }
+            .thematicBreak {
+                Divider()
+                    .markdownMargin(top: 18, bottom: 18)
+            }
+            .table { configuration in
+                configuration.label
+                    .markdownTableBorderStyle(.init(color: DesignSystem.Color.panelBorder.dsColor))
+                    .markdownTableBackgroundStyle(
+                        .alternatingRows(
+                            DesignSystem.Color.sidebarRowSelectedFill.dsColor,
+                            DesignSystem.Color.panelSurface.dsColor
+                        )
+                    )
+                    .markdownMargin(top: 10, bottom: 12)
             }
     }
 
@@ -289,6 +489,64 @@ struct ContextPanelView: View {
             return .easeIn(duration: duration)
         case .easeOut:
             return .easeOut(duration: duration)
+        }
+    }
+}
+
+// MARK: - Context Pane Tab Bar (replaces Bonsplit tab strip for context pane)
+
+struct ContextPaneTabBar: View {
+    @ObservedObject var panel: ContextPanel
+    let onSelect: (ContextPageKind) -> Void
+
+    @State private var hoveredKind: ContextPageKind?
+
+    var body: some View {
+        HStack(spacing: DesignSystem.Primitive.Space.xs) {
+            ForEach(ContextPageKind.allCases, id: \.self) { kind in
+                tabPill(for: kind)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, DesignSystem.Primitive.Space.md)
+        .padding(.top, DesignSystem.Primitive.Space.sm)
+        .frame(height: 32 + DesignSystem.Primitive.Space.sm)
+    }
+
+    private func tabPill(for kind: ContextPageKind) -> some View {
+        let isActive = panel.pageState.kind == kind
+        let isHovered = hoveredKind == kind
+
+        return Button {
+            onSelect(kind)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: kind.systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(kind.title)
+                    .font(DesignSystem.Typography.primaryButton)
+            }
+            .foregroundStyle(
+                isActive
+                    ? DesignSystem.Color.topTabActiveForeground.dsColor
+                    : DesignSystem.Color.topTabInactiveForeground.dsColor
+            )
+            .padding(.horizontal, DesignSystem.Metrics.topShelfTabHorizontalPadding)
+            .frame(height: DesignSystem.Metrics.topShelfControlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: DesignSystem.Primitive.Radius.control, style: .continuous)
+                    .fill(
+                        isActive
+                            ? DesignSystem.Color.topTabActiveFill.dsColor
+                            : isHovered
+                                ? DesignSystem.Color.topTabHoverFill.dsColor
+                                : DesignSystem.Color.topTabInactiveFill.dsColor
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredKind = hovering ? kind : nil
         }
     }
 }
@@ -383,10 +641,7 @@ final class ContextPanelPointerObserverView: NSView {
     }
 
     private func forwardedTarget(for event: NSEvent) -> NSView? {
-        guard let window,
-              let contentView = window.contentView else {
-            return nil
-        }
+        guard let window, let contentView = window.contentView else { return nil }
         isHidden = true
         defer { isHidden = false }
         let point = contentView.convert(event.locationInWindow, from: nil)

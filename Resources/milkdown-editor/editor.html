@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Markdown Editor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    color: #09090b;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  #editor {
+    height: 100%;
+    overflow-y: auto;
+    padding: 12px 20px 60px;
+  }
+
+  /* ProseMirror base */
+  .ProseMirror { outline: none; line-height: 1.6; }
+  .ProseMirror-focused { outline: none; }
+  .ProseMirror > *:first-child { margin-top: 0; }
+
+  /* Placeholder */
+  .ProseMirror p.is-editor-empty:first-child::before {
+    content: "Start typing...";
+    color: rgba(63, 63, 70, 0.45);
+    pointer-events: none;
+    float: left;
+    height: 0;
+  }
+
+  /* ── Typography matching ernest design ── */
+  .ProseMirror h1 {
+    font-size: 22px; font-weight: 600; color: #09090b;
+    margin: 0.8em 0 0.4em; letter-spacing: -0.02em; line-height: 1.3;
+    border-bottom: 1px solid #e4e4e7; padding-bottom: 6px;
+  }
+  .ProseMirror h2 {
+    font-size: 18px; font-weight: 600; color: #09090b;
+    margin: 0.7em 0 0.35em; letter-spacing: -0.01em; line-height: 1.3;
+  }
+  .ProseMirror h3 {
+    font-size: 15px; font-weight: 600; color: #09090b;
+    margin: 0.6em 0 0.3em; line-height: 1.4;
+  }
+  .ProseMirror h4, .ProseMirror h5, .ProseMirror h6 {
+    font-size: 13px; font-weight: 600; color: #09090b;
+    margin: 0.5em 0 0.25em;
+  }
+  .ProseMirror p { margin: 0.5em 0; line-height: 1.6; }
+  .ProseMirror strong { font-weight: 600; }
+  .ProseMirror em { font-style: italic; }
+
+  .ProseMirror a {
+    color: #1a4731; text-decoration: underline;
+    text-decoration-color: rgba(26, 71, 49, 0.3);
+    text-underline-offset: 2px; cursor: text;
+  }
+  .ProseMirror code {
+    font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.875em; background: rgba(26, 71, 49, 0.08);
+    border: 1px solid rgba(26, 71, 49, 0.12); border-radius: 6px;
+    padding: 1px 5px; color: #1a4731;
+  }
+  .ProseMirror pre {
+    font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.825em; line-height: 1.5;
+    background: rgba(26, 71, 49, 0.06); border: 1px solid rgba(26, 71, 49, 0.1);
+    border-radius: 10px; padding: 12px 14px; margin: 0.6em 0;
+    overflow-x: auto; white-space: pre;
+  }
+  .ProseMirror pre code {
+    background: transparent; border: none; padding: 0;
+    font-size: inherit; color: inherit;
+  }
+  .ProseMirror blockquote {
+    border-left: 3px solid rgba(26, 71, 49, 0.3);
+    padding-left: 14px; margin: 0.5em 0; color: rgba(9, 9, 11, 0.72);
+  }
+  .ProseMirror ul, .ProseMirror ol { margin: 0.5em 0; padding-left: 1.8em; }
+  .ProseMirror li { margin: 0.2em 0; line-height: 1.6; }
+  .ProseMirror li p { margin: 0; }
+  .ProseMirror ul { list-style-type: disc; }
+  .ProseMirror ol { list-style-type: decimal; }
+  .ProseMirror hr { border: none; border-top: 1px solid #e4e4e7; margin: 1em 0; }
+
+  .ProseMirror table {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    border: 1px solid #000; border-radius: 8px; overflow: hidden;
+    margin: 0.5em 0; font-size: 0.875em;
+  }
+  .ProseMirror th {
+    background: #dce8df; font-weight: 600; text-align: left;
+    padding: 8px 12px; border-bottom: 2px solid #000; border-right: 1px solid #000;
+  }
+  .ProseMirror th:last-child { border-right: 0; }
+  .ProseMirror td {
+    padding: 6px 12px; border-bottom: 1px solid #000; border-right: 1px solid #000;
+  }
+  .ProseMirror td:last-child { border-right: 0; }
+  .ProseMirror tr:last-child td { border-bottom: 0; }
+  .ProseMirror tbody tr:nth-child(even) { background: rgba(220, 232, 223, 0.35); }
+
+  .ProseMirror ::selection { background: #dce8df; color: #09090b; }
+  .ProseMirror { caret-color: #1a4731; }
+</style>
+</head>
+<body>
+<div id="editor"></div>
+<script type="module">
+  import {
+    Editor, rootCtx, defaultValueCtx, editorViewOptionsCtx,
+    commonmark, gfm, history, listener, listenerCtx, replaceAll
+  } from './milkdown-bundle.js';
+
+  let editorInstance = null;
+  let suppressChange = false;
+
+  async function createEditor(content) {
+    editorInstance = await Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, '#editor');
+        ctx.set(defaultValueCtx, content || '');
+        ctx.set(editorViewOptionsCtx, {
+          attributes: { spellcheck: 'true' }
+        });
+        ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {
+          if (suppressChange) return;
+          if (markdown !== prevMarkdown) {
+            try {
+              window.webkit.messageHandlers.milkdownBridge.postMessage({
+                type: 'contentChanged',
+                content: markdown
+              });
+            } catch (e) {}
+          }
+        });
+      })
+      .use(commonmark)
+      .use(gfm)
+      .use(history)
+      .use(listener)
+      .create();
+
+    try {
+      window.webkit.messageHandlers.milkdownBridge.postMessage({ type: 'ready' });
+    } catch (e) {
+      console.log('Editor ready (no bridge)');
+    }
+  }
+
+  window.initEditor = function(content) {
+    createEditor(content || '');
+  };
+
+  window.editorSetContent = function(markdown) {
+    if (!editorInstance) return;
+    suppressChange = true;
+    editorInstance.action(replaceAll(markdown));
+    suppressChange = false;
+  };
+
+  window.editorFocus = function() {
+    var pm = document.querySelector('.ProseMirror');
+    if (pm) pm.focus();
+  };
+</script>
+</body>
+</html>

@@ -4042,7 +4042,8 @@ class TabManager: ObservableObject {
         preferredProfileID: UUID? = nil,
         insertAtEnd: Bool = false,
         initialUserScripts: [WKUserScript] = [],
-        chromeless: Bool = false
+        chromeless: Bool = false,
+        initialTitle: String? = nil
     ) -> UUID? {
         guard let workspace = tabs.first(where: { $0.id == tabId }) else { return nil }
         if selectedTabId != tabId {
@@ -4103,7 +4104,8 @@ class TabManager: ObservableObject {
                   insertAtEnd: insertAtEnd,
                   preferredProfileID: preferredProfileID,
                   initialUserScripts: initialUserScripts,
-                  chromeless: chromeless
+                  chromeless: chromeless,
+                  initialTitle: initialTitle
               ) else {
             return nil
         }
@@ -4118,7 +4120,8 @@ class TabManager: ObservableObject {
         preferredProfileID: UUID? = nil,
         insertAtEnd: Bool = false,
         initialUserScripts: [WKUserScript] = [],
-        chromeless: Bool = false
+        chromeless: Bool = false,
+        initialTitle: String? = nil
     ) -> UUID? {
         guard let tabId = selectedTabId else { return nil }
         return openBrowser(
@@ -4128,7 +4131,8 @@ class TabManager: ObservableObject {
             preferredProfileID: preferredProfileID,
             insertAtEnd: insertAtEnd,
             initialUserScripts: initialUserScripts,
-            chromeless: chromeless
+            chromeless: chromeless,
+            initialTitle: initialTitle
         )
     }
 

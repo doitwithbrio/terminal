@@ -1,0 +1,548 @@
+html[data-cmux-t3-theme="ernest"] {
+  color-scheme: light !important;
+  --background: #ffffff !important;
+  --foreground: #09090b !important;
+  --card: #ffffff !important;
+  --card-foreground: #09090b !important;
+  --popover: #ffffff !important;
+  --popover-foreground: #09090b !important;
+  --primary: #1a4731 !important;
+  --primary-foreground: #fafaf9 !important;
+  --secondary: #dce8df !important;
+  --secondary-foreground: #09090b !important;
+  --muted: #dce8df !important;
+  --muted-foreground: rgba(63, 63, 70, 0.82) !important;
+  --accent: #dce8df !important;
+  --accent-foreground: #09090b !important;
+  --border: #e4e4e7 !important;
+  --input: #e4e4e7 !important;
+  --ring: #1a4731 !important;
+  --radius: 0.75rem !important;
+}
+
+html[data-cmux-t3-theme="ernest"] :is(.dark, .dark *) {
+  --background: #ffffff !important;
+  --foreground: #09090b !important;
+  --card: #ffffff !important;
+  --card-foreground: #09090b !important;
+  --popover: #ffffff !important;
+  --popover-foreground: #09090b !important;
+  --primary: #1a4731 !important;
+  --primary-foreground: #fafaf9 !important;
+  --secondary: #dce8df !important;
+  --secondary-foreground: #09090b !important;
+  --muted: #dce8df !important;
+  --muted-foreground: rgba(63, 63, 70, 0.82) !important;
+  --accent: #dce8df !important;
+  --accent-foreground: #09090b !important;
+  --border: #e4e4e7 !important;
+  --input: #e4e4e7 !important;
+  --ring: #1a4731 !important;
+  color-scheme: light !important;
+}
+
+html[data-cmux-t3-theme="ernest"] body,
+html[data-cmux-t3-theme="ernest"] #root,
+html[data-cmux-t3-theme="ernest"] #root > div {
+  background: #ffffff !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] header {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-bottom: 0 !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] header h1,
+html[data-cmux-t3-theme="ernest"] header h2 {
+  color: #09090b !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+}
+
+html[data-cmux-t3-theme="ernest"] header :is([data-slot="button"], button) {
+  min-height: 30px !important;
+  height: 30px !important;
+  padding-inline: 10px !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: #dce8df !important;
+  color: rgba(9, 9, 11, 0.72) !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] header :is([data-slot="button"], button):hover {
+  background: #c8dace !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] > div {
+  padding: 0 !important;
+  border-radius: 14px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] > div > div {
+  border: 1px solid #e4e4e7 !important;
+  border-radius: 14px !important;
+  background: #dce8df !important;
+  box-shadow: none !important;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] > div > div:focus-within {
+  border-color: rgba(26, 71, 49, 0.45) !important;
+  box-shadow: 0 0 0 3px rgba(26, 71, 49, 0.12) !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-footer="true"] {
+  border-top: 0 !important;
+  gap: 8px !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-footer="true"] [data-slot="separator"] {
+  display: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-footer="true"] :is([data-slot="button"], button[type="button"]) {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  padding-inline: 12px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #dce8df !important;
+  color: rgba(9, 9, 11, 0.72) !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-footer="true"] :is([data-slot="button"], button[type="button"]):hover {
+  background: #c8dace !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-footer="true"] :is(
+  [aria-pressed="true"],
+  [data-state="open"],
+  [data-state="checked"],
+  [data-state="on"],
+  [aria-selected="true"]
+) {
+  background: #1a4731 !important;
+  color: #fafaf9 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-footer="true"] :is(
+  [aria-pressed="true"],
+  [data-state="open"],
+  [data-state="checked"],
+  [data-state="on"],
+  [aria-selected="true"]
+) svg {
+  color: #fafaf9 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-actions="right"],
+html[data-cmux-t3-theme="ernest"] [data-chat-composer-actions="left"] {
+  gap: 8px !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] :is(
+  textarea,
+  input,
+  [contenteditable="true"],
+  [role="textbox"]
+) {
+  color: #09090b !important;
+  caret-color: #1a4731 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] :is(textarea, input)::placeholder {
+  color: rgba(63, 63, 70, 0.72) !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] :is(
+  textarea,
+  input,
+  [contenteditable="true"],
+  [role="textbox"]
+):focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] button[type="submit"] {
+  width: 34px !important;
+  height: 34px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #1a4731 !important;
+  color: #fafaf9 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] button[type="submit"]:hover {
+  background: #143726 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] button[type="submit"]:active {
+  background: #10301f !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] button[type="submit"]:disabled {
+  background: #dfe7e1 !important;
+  color: rgba(26, 71, 49, 0.56) !important;
+  opacity: 1 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] form[data-chat-composer-form="true"] button[type="submit"] svg {
+  width: 15px !important;
+  height: 15px !important;
+}
+
+html[data-cmux-t3-theme="ernest"] ::selection {
+  background: #dce8df !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-surface="composer-shell"] {
+  border: 1px solid #e4e4e7 !important;
+  border-radius: 14px !important;
+  background: #dce8df !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-surface="composer-shell"]:focus-within {
+  border-color: rgba(26, 71, 49, 0.45) !important;
+  box-shadow: 0 0 0 3px rgba(26, 71, 49, 0.12) !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-surface="composer-editor"] {
+  color: #09090b !important;
+  caret-color: #1a4731 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-chip="header-badge"],
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-chip="terminal"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 32px !important;
+  height: 32px !important;
+  padding-inline: 12px !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #dce8df !important;
+  color: rgba(9, 9, 11, 0.72) !important;
+  box-shadow: none !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  overflow: visible !important;
+}
+
+html[data-cmux-t3-theme="ernest"] :is([data-cmux-t3-chip="header-badge"], [data-cmux-t3-chip="terminal"]) svg {
+  color: rgba(9, 9, 11, 0.72) !important;
+  stroke: currentColor !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-toolbar-button="thread-action"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #dce8df !important;
+  color: rgba(9, 9, 11, 0.72) !important;
+  box-shadow: none !important;
+  flex-shrink: 0 !important;
+  overflow: visible !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-toolbar-button="thread-action"]:hover {
+  background: #c8dace !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-toolbar-button="thread-action"][data-cmux-t3-toolbar-segment="left"] {
+  margin-right: -2px !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-toolbar-button="thread-action"][data-cmux-t3-toolbar-segment="left"]::after {
+  content: "" !important;
+  position: absolute !important;
+  top: 8px !important;
+  right: 0 !important;
+  width: 1px !important;
+  height: 16px !important;
+  background: rgba(9, 9, 11, 0.08) !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-toolbar-button="thread-action"][data-cmux-t3-toolbar-segment="right"] {
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] {
+  position: relative !important;
+  border: 0 !important;
+  border-radius: 18px 18px 10px 18px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 12px 16px 0 !important;
+  overflow: visible !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"]::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: 0 0 1.7rem 0 !important;
+  border: 1px solid rgba(26, 71, 49, 0.15) !important;
+  border-radius: 18px 18px 10px 18px !important;
+  background: #dce8df !important;
+  box-shadow: none !important;
+  pointer-events: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] > * {
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] > div:has(> [data-cmux-t3-message-meta="timestamp"]) {
+  margin: 8px -16px 0 !important;
+  padding: 0 16px !important;
+  min-height: 1.7rem !important;
+  align-items: center !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message-meta="timestamp"] {
+  display: block !important;
+  margin-top: 0 !important;
+  color: rgba(63, 63, 70, 0.72) !important;
+  text-align: right !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-button="scroll-bottom"] {
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #1a4731 !important;
+  color: #fafaf9 !important;
+  box-shadow: none !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-button="scroll-bottom"]:hover {
+  background: #143726 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-button="scroll-bottom"]:active {
+  background: #10301f !important;
+}
+
+/* ── User message markdown content ── */
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] [data-cmux-md-content="user"] {
+  position: relative !important;
+  z-index: 1 !important;
+  line-height: 1.5 !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  white-space: normal !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] [data-cmux-md="paragraph"] {
+  margin: 0 0 0.4em !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] [data-cmux-md="paragraph"]:last-child {
+  margin-bottom: 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] h1[data-cmux-md="heading"] {
+  font-size: 1.25em !important;
+  font-weight: 700 !important;
+  margin: 0.6em 0 0.3em !important;
+  color: #09090b !important;
+  letter-spacing: -0.01em !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] h2[data-cmux-md="heading"] {
+  font-size: 1.1em !important;
+  font-weight: 600 !important;
+  margin: 0.5em 0 0.25em !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] h3[data-cmux-md="heading"] {
+  font-size: 1em !important;
+  font-weight: 600 !important;
+  margin: 0.4em 0 0.2em !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] [data-cmux-md="heading"]:first-child {
+  margin-top: 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] code[data-cmux-md="inline-code"] {
+  font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 0.875em !important;
+  background: rgba(26, 71, 49, 0.08) !important;
+  border: 1px solid rgba(26, 71, 49, 0.12) !important;
+  border-radius: 6px !important;
+  padding: 1px 5px !important;
+  color: #1a4731 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] pre[data-cmux-md-code="block"] {
+  font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 0.825em !important;
+  line-height: 1.5 !important;
+  background: rgba(26, 71, 49, 0.06) !important;
+  border: 1px solid rgba(26, 71, 49, 0.1) !important;
+  border-radius: 10px !important;
+  padding: 10px 12px !important;
+  margin: 0.5em 0 !important;
+  overflow-x: auto !important;
+  white-space: pre !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] pre[data-cmux-md-code="block"] code {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: inherit !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] blockquote[data-cmux-md="blockquote"] {
+  border-left: 3px solid rgba(26, 71, 49, 0.3) !important;
+  padding-left: 12px !important;
+  margin: 0.4em 0 !important;
+  color: rgba(9, 9, 11, 0.72) !important;
+  font-style: italic !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] ul[data-cmux-md="list"],
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] ol[data-cmux-md="list"] {
+  margin: 0.4em 0 !important;
+  padding-left: 1.5em !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] ul[data-cmux-md="list"] {
+  list-style-type: disc !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] ol[data-cmux-md="list"] {
+  list-style-type: decimal !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] [data-cmux-md="list"] li {
+  margin: 0.15em 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] strong {
+  font-weight: 600 !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] em {
+  font-style: italic !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] a {
+  color: #1a4731 !important;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(26, 71, 49, 0.3) !important;
+  text-underline-offset: 2px !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] a:hover {
+  text-decoration-color: #1a4731 !important;
+}
+
+/* ── Markdown table styles (user + assistant messages) ── */
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"],
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table {
+  width: 100% !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  border: 1px solid #000000 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  margin: 0.5em 0 !important;
+  font-size: 0.875em !important;
+  line-height: 1.5 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] th,
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table th {
+  background: #dce8df !important;
+  color: #09090b !important;
+  font-weight: 600 !important;
+  text-align: left !important;
+  padding: 8px 12px !important;
+  border-bottom: 2px solid #000000 !important;
+  border-right: 1px solid #000000 !important;
+  white-space: nowrap !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] th:last-child,
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table th:last-child {
+  border-right: 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] td,
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table td {
+  padding: 6px 12px !important;
+  border-bottom: 1px solid #000000 !important;
+  border-right: 1px solid #000000 !important;
+  color: #09090b !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] td:last-child,
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table td:last-child {
+  border-right: 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] tr:last-child td,
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] tbody tr:nth-child(even),
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table tbody tr:nth-child(even) {
+  background: rgba(220, 232, 223, 0.35) !important;
+}
+
+html[data-cmux-t3-theme="ernest"] [data-cmux-t3-message="user-shell"] table[data-cmux-md="table"] code,
+html[data-cmux-t3-theme="ernest"] [data-message-role="assistant"] table code {
+  font-family: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 0.85em !important;
+  background: rgba(26, 71, 49, 0.08) !important;
+  border: 1px solid rgba(26, 71, 49, 0.12) !important;
+  border-radius: 4px !important;
+  padding: 1px 4px !important;
+}

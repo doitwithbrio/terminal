@@ -24,7 +24,7 @@ final class AgentPickerDataSource {
         tabManager: TabManager?,
         allTabManagers: [(tabManager: TabManager, windowTitle: String?)],
         workspaceDirectory: String?,
-        openT3Code: @escaping @MainActor (_ threadId: String?) -> Void,
+        openT3Code: @escaping @MainActor (_ threadId: String?, _ threadTitle: String?) -> Void,
         openOMO: @escaping @MainActor (_ sessionArgs: [String]) -> Void,
         focusPanel: @escaping @MainActor (_ tabManager: TabManager, _ workspaceId: UUID, _ panelId: UUID) -> Void
     ) -> [AgentPickerItem] {
@@ -64,7 +64,7 @@ final class AgentPickerDataSource {
 
     private func t3codeItems(
         workspaceDirectory: String?,
-        openT3Code: @escaping @MainActor (_ threadId: String?) -> Void
+        openT3Code: @escaping @MainActor (_ threadId: String?, _ threadTitle: String?) -> Void
     ) -> [AgentPickerItem] {
         var items: [AgentPickerItem] = []
         let normalizedWorkspaceDirectory = Self.normalizedWorkspaceDirectory(workspaceDirectory)
@@ -75,7 +75,7 @@ final class AgentPickerDataSource {
             title: String(localized: "agentPicker.t3code.new", defaultValue: "New Thread"),
             subtitle: nil,
             isCreateNew: true,
-            action: { openT3Code(nil) }
+            action: { openT3Code(nil, nil) }
         ))
 
         guard let normalizedWorkspaceDirectory else {
@@ -104,7 +104,7 @@ final class AgentPickerDataSource {
                         "workspaceDir=\(normalizedWorkspaceDirectory) scopedMatch=1"
                     )
 #endif
-                    openT3Code(threadId)
+                    openT3Code(threadId, thread.title)
                 }
             ))
         }

@@ -3062,6 +3062,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         let paneId: UUID
         let instanceSerial: UInt64
         let inWindow: Bool
+        let windowId: ObjectIdentifier?
         let area: CGFloat
     }
     private var portalLifecycleState: PortalLifecycleState = .live
@@ -3299,6 +3300,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             paneId: current.paneId,
             instanceSerial: current.instanceSerial,
             inWindow: false,
+            windowId: nil,
             area: current.area
         )
 #if DEBUG
@@ -3316,6 +3318,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         paneId: PaneID,
         instanceSerial: UInt64,
         inWindow: Bool,
+        windowId: ObjectIdentifier?,
         bounds: CGRect,
         reason: String
     ) -> Bool {
@@ -3324,6 +3327,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             paneId: paneId.id,
             instanceSerial: instanceSerial,
             inWindow: inWindow,
+            windowId: windowId,
             area: Self.portalHostArea(for: bounds)
         )
 
@@ -3335,20 +3339,25 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
             let currentUsable = Self.portalHostIsUsable(current)
             let nextUsable = Self.portalHostIsUsable(next)
-            // During split churn SwiftUI can briefly keep the old host alive while the new
-            // host for the same pane is already in the window. Prefer the newer live host
-            // immediately so the surface moves with the pane instead of waiting for a later
-            // update from unrelated focus/layout work.
-            let newerSamePaneHostReady =
+            let hostedWindowId = hostedView.window.map { ObjectIdentifier($0) }
+            // When a pane moves across windows, the same-pane stale host in the old window can
+            // stay "usable" forever. Only hand ownership to the host in the window that already
+            // contains the hosted surface; otherwise two same-pane hosts can ping-pong claims.
+            let differentWindowSamePaneHostReady =
                 current.paneId == paneId.id &&
                 nextUsable &&
-                next.instanceSerial > current.instanceSerial
+                hostedWindowId != nil &&
+                current.windowId != nil &&
+                next.windowId != nil &&
+                current.windowId != next.windowId &&
+                next.windowId == hostedWindowId &&
+                current.windowId != hostedWindowId
             // A dragged terminal must hand off immediately when it moves to a different pane.
             // Waiting for the old host to become "worse" leaves the moved pane blank/stale.
             let shouldReplace =
                 current.paneId != paneId.id ||
                 !currentUsable ||
-                newerSamePaneHostReady
+                differentWindowSamePaneHostReady
 
             if shouldReplace {
 #if DEBUG
@@ -3356,9 +3365,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
                     "terminal.portal.host.claim surface=\(id.uuidString.prefix(5)) " +
                     "reason=\(reason) host=\(hostId) pane=\(paneId.id.uuidString.prefix(5)) " +
                     "inWin=\(inWindow ? 1 : 0) " +
+                    "window=\(String(describing: windowId)) hostedWindow=\(String(describing: hostedWindowId)) " +
                     "size=\(String(format: "%.1fx%.1f", bounds.width, bounds.height)) " +
                     "replacingHost=\(current.hostId) replacingPane=\(current.paneId.uuidString.prefix(5)) " +
-                    "replacingInWin=\(current.inWindow ? 1 : 0) " +
+                    "replacingInWin=\(current.inWindow ? 1 : 0) replacingWindow=\(String(describing: current.windowId)) " +
                     "replacingArea=\(String(format: "%.1f", current.area))"
                 )
 #endif
@@ -3371,9 +3381,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
                 "terminal.portal.host.skip surface=\(id.uuidString.prefix(5)) " +
                 "reason=\(reason) host=\(hostId) pane=\(paneId.id.uuidString.prefix(5)) " +
                 "inWin=\(inWindow ? 1 : 0) " +
+                "window=\(String(describing: windowId)) hostedWindow=\(String(describing: hostedWindowId)) " +
                 "size=\(String(format: "%.1fx%.1f", bounds.width, bounds.height)) " +
                 "ownerHost=\(current.hostId) ownerPane=\(current.paneId.uuidString.prefix(5)) " +
-                "ownerInWin=\(current.inWindow ? 1 : 0) " +
+                "ownerInWin=\(current.inWindow ? 1 : 0) ownerWindow=\(String(describing: current.windowId)) " +
                 "ownerArea=\(String(format: "%.1f", current.area))"
             )
 #endif
@@ -3386,6 +3397,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             "terminal.portal.host.claim surface=\(id.uuidString.prefix(5)) " +
             "reason=\(reason) host=\(hostId) pane=\(paneId.id.uuidString.prefix(5)) " +
             "inWin=\(inWindow ? 1 : 0) " +
+            "window=\(String(describing: windowId)) " +
             "size=\(String(format: "%.1fx%.1f", bounds.width, bounds.height)) replacingHost=nil"
         )
 #endif
@@ -3400,6 +3412,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             "terminal.portal.host.release surface=\(id.uuidString.prefix(5)) " +
             "reason=\(reason) host=\(hostId) pane=\(current.paneId.uuidString.prefix(5)) " +
             "inWin=\(current.inWindow ? 1 : 0) " +
+            "window=\(String(describing: current.windowId)) " +
             "area=\(String(format: "%.1f", current.area))"
         )
 #endif
@@ -7449,16 +7462,6 @@ final class GhosttySurfaceScrollView: NSView {
         return String(describing: contents)
     }
 
-    private func applyTerminalCornerRadius() {
-        let radius = DesignSystem.Terminal.cornerRadius
-        layer?.cornerRadius = radius
-        layer?.masksToBounds = true
-        backgroundView.layer?.cornerRadius = radius
-        backgroundView.layer?.masksToBounds = true
-        inactiveOverlayView.layer?.cornerRadius = radius
-        inactiveOverlayView.layer?.masksToBounds = true
-    }
-
     private static func updatePresentStats(surfaceId: UUID, layer: CALayer?) -> (count: Int, last: CFTimeInterval, key: String) {
         let key = contentsKey(for: layer)
         if lastContentsKeys[surfaceId] != key {
@@ -7505,6 +7508,16 @@ final class GhosttySurfaceScrollView: NSView {
         surfaceView.terminalSurface?.id
     }
 #endif
+
+    private func applyTerminalCornerRadius() {
+        let radius = DesignSystem.Terminal.cornerRadius
+        layer?.cornerRadius = radius
+        layer?.masksToBounds = true
+        backgroundView.layer?.cornerRadius = radius
+        backgroundView.layer?.masksToBounds = true
+        inactiveOverlayView.layer?.cornerRadius = radius
+        inactiveOverlayView.layer?.masksToBounds = true
+    }
 
     func portalBindingGuardState() -> (surfaceId: UUID?, generation: UInt64?, state: String) {
         guard let terminalSurface = surfaceView.terminalSurface else {
@@ -10397,6 +10410,31 @@ struct GhosttyTerminalView: NSViewRepresentable {
         TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: window)
     }
 
+    private static func shouldRefreshAfterPortalHostTransfer(
+        previousBoundHostId: ObjectIdentifier?,
+        nextHostId: ObjectIdentifier,
+        previousHostedWindowId: ObjectIdentifier?,
+        nextHostWindowId: ObjectIdentifier?,
+        hostedViewHadSuperview: Bool,
+        portalEntryMissing: Bool
+    ) -> Bool {
+        previousBoundHostId != nextHostId ||
+            previousHostedWindowId != nextHostWindowId ||
+            !hostedViewHadSuperview ||
+            portalEntryMissing
+    }
+
+    private static func refreshHostedViewAfterPortalHostTransfer(
+        _ hostedView: GhosttySurfaceScrollView,
+        reason: String
+    ) {
+        // A host transfer can complete without any frame delta or reveal transition. In that case
+        // the normal portal refresh hooks never fire and the terminal can stay on a stale IOSurface
+        // until a later focus event. Force one redraw now when the owning host actually changes.
+        hostedView.reconcileGeometryNow()
+        hostedView.refreshSurfaceNow(reason: reason)
+    }
+
     func makeNSView(context: Context) -> NSView {
         let container = HostContainerView(frame: .zero)
         container.wantsLayer = false
@@ -10452,6 +10490,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                 paneId: paneId,
                 instanceSerial: host.instanceSerial,
                 inWindow: host.window != nil,
+                windowId: host.window.map { ObjectIdentifier($0) },
                 bounds: host.bounds,
                 reason: "update"
             )
@@ -10515,11 +10554,16 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     paneId: paneId,
                     instanceSerial: host.instanceSerial,
                     inWindow: host.window != nil,
+                    windowId: host.window.map { ObjectIdentifier($0) },
                     bounds: host.bounds,
                     reason: "didMoveToWindow"
                 ) else { return }
                 guard host.window != nil else { return }
                 guard portalBindingStillLive() else { return }
+                let previousBoundHostId = coordinator.lastBoundHostId
+                let previousHostedWindowId = hostedView.window.map { ObjectIdentifier($0) }
+                let hostedViewHadSuperview = hostedView.superview != nil
+                let portalEntryMissing = !TerminalWindowPortalRegistry.isHostedView(hostedView, boundTo: host)
                 TerminalWindowPortalRegistry.bind(
                     hostedView: hostedView,
                     to: host,
@@ -10533,6 +10577,19 @@ struct GhosttyTerminalView: NSViewRepresentable {
                 hostedView.setVisibleInUI(coordinator.desiredIsVisibleInUI)
                 hostedView.setActive(coordinator.desiredIsActive)
                 hostedView.setNotificationRing(visible: coordinator.desiredShowsUnreadNotificationRing)
+                if Self.shouldRefreshAfterPortalHostTransfer(
+                    previousBoundHostId: previousBoundHostId,
+                    nextHostId: ObjectIdentifier(host),
+                    previousHostedWindowId: previousHostedWindowId,
+                    nextHostWindowId: host.window.map { ObjectIdentifier($0) },
+                    hostedViewHadSuperview: hostedViewHadSuperview,
+                    portalEntryMissing: portalEntryMissing
+                ) {
+                    Self.refreshHostedViewAfterPortalHostTransfer(
+                        hostedView,
+                        reason: "portal.hostTransfer.didMoveToWindow"
+                    )
+                }
             }
             host.onGeometryChanged = { [weak host, weak hostedView, weak coordinator] in
                 guard let host, let hostedView, let coordinator else { return }
@@ -10542,6 +10599,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     paneId: paneId,
                     instanceSerial: host.instanceSerial,
                     inWindow: host.window != nil,
+                    windowId: host.window.map { ObjectIdentifier($0) },
                     bounds: host.bounds,
                     reason: "geometryChanged"
                 ) else { return }
@@ -10550,6 +10608,9 @@ struct GhosttyTerminalView: NSViewRepresentable {
                 if host.window != nil,
                    (coordinator.lastBoundHostId != hostId ||
                     !TerminalWindowPortalRegistry.isHostedView(hostedView, boundTo: host)) {
+                    let previousBoundHostId = coordinator.lastBoundHostId
+                    let previousHostedWindowId = hostedView.window.map { ObjectIdentifier($0) }
+                    let hostedViewHadSuperview = hostedView.superview != nil
 #if DEBUG
                     dlog(
                         "ws.hostState.rebindOnGeometry surface=\(terminalSurface.id.uuidString.prefix(5)) " +
@@ -10569,6 +10630,19 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     hostedView.setVisibleInUI(coordinator.desiredIsVisibleInUI)
                     hostedView.setActive(coordinator.desiredIsActive)
                     hostedView.setNotificationRing(visible: coordinator.desiredShowsUnreadNotificationRing)
+                    if Self.shouldRefreshAfterPortalHostTransfer(
+                        previousBoundHostId: previousBoundHostId,
+                        nextHostId: hostId,
+                        previousHostedWindowId: previousHostedWindowId,
+                        nextHostWindowId: host.window.map { ObjectIdentifier($0) },
+                        hostedViewHadSuperview: hostedViewHadSuperview,
+                        portalEntryMissing: true
+                    ) {
+                        Self.refreshHostedViewAfterPortalHostTransfer(
+                            hostedView,
+                            reason: "portal.hostTransfer.geometryRebind"
+                        )
+                    }
                 }
                 Self.synchronizePortalGeometry(
                     for: host,
@@ -10589,6 +10663,9 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     previousDesiredShowsUnreadNotificationRing != showsUnreadNotificationRing ||
                     previousDesiredPortalZPriority != portalZPriority
                 if portalBindingLive && shouldBindNow {
+                    let previousBoundHostId = coordinator.lastBoundHostId
+                    let previousHostedWindowId = hostedView.window.map { ObjectIdentifier($0) }
+                    let hostedViewHadSuperview = hostedView.superview != nil
 #if DEBUG
                     if portalEntryMissing {
                         dlog(
@@ -10608,6 +10685,19 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     )
                     coordinator.lastBoundHostId = hostId
                     coordinator.lastSynchronizedHostGeometryRevision = geometryRevision
+                    if Self.shouldRefreshAfterPortalHostTransfer(
+                        previousBoundHostId: previousBoundHostId,
+                        nextHostId: hostId,
+                        previousHostedWindowId: previousHostedWindowId,
+                        nextHostWindowId: host.window.map { ObjectIdentifier($0) },
+                        hostedViewHadSuperview: hostedViewHadSuperview,
+                        portalEntryMissing: portalEntryMissing
+                    ) {
+                        Self.refreshHostedViewAfterPortalHostTransfer(
+                            hostedView,
+                            reason: "portal.hostTransfer.updateRebind"
+                        )
+                    }
                 } else if portalBindingLive && coordinator.lastSynchronizedHostGeometryRevision != geometryRevision {
                     Self.synchronizePortalGeometry(
                         for: host,

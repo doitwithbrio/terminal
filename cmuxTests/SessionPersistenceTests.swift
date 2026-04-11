@@ -1,5 +1,6 @@
 import XCTest
 import SQLite3
+import WebKit
 
 #if canImport(cmux_DEV)
 @testable import cmux_DEV
@@ -45,6 +46,95 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertEqual(restoredPanel.filePath, markdownURL.path)
         XCTAssertEqual(restored.customTitle, "Docs")
         XCTAssertEqual(restored.panelTitle(panelId: restoredPanelId), "Readme")
+    }
+
+    @MainActor
+    func testWorkspaceSessionSnapshotPersistsContextBindingsWithoutStructuralContextPanel() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-session-context-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(workingDirectory: root.path)
+        let agentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+        let contextPanelId = try XCTUnwrap(workspace.panels.values.compactMap { ($0 as? ContextPanel)?.id }.first)
+
+        workspace.focusPanel(contextPanelId)
+        workspace.selectContextPage(forAgentPanelId: agentPanelId, kind: .plan)
+
+        let snapshot = workspace.sessionSnapshot(includeScrollback: false)
+
+        XCTAssertEqual(snapshot.focusedPanelId, agentPanelId)
+        XCTAssertFalse(snapshot.panels.contains(where: { $0.type == .context }))
+
+        let binding = try XCTUnwrap(snapshot.contextBindings.first(where: { $0.agentPanelId == agentPanelId }))
+        XCTAssertEqual(binding.kindRawValue, ContextPageKind.plan.rawValue)
+        XCTAssertNotNil(binding.planFilePath)
+    }
+
+    @MainActor
+    func testRestoreSessionSnapshotRecreatesContextPanelAndRemapsBindings() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-session-restore-context-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(workingDirectory: root.path)
+        let firstAgentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+        let paneId = try XCTUnwrap(workspace.paneId(forPanelId: firstAgentPanelId))
+        let secondPanel = try XCTUnwrap(workspace.newTerminalSurface(inPane: paneId, focus: false))
+
+        workspace.selectContextPage(forAgentPanelId: firstAgentPanelId, kind: .plan)
+        workspace.selectContextPage(forAgentPanelId: secondPanel.id, kind: .agentMd)
+        workspace.focusPanel(secondPanel.id)
+
+        let snapshot = workspace.sessionSnapshot(includeScrollback: false)
+        let originalPlanBinding = try XCTUnwrap(
+            snapshot.contextBindings.first(where: { $0.agentPanelId == firstAgentPanelId && $0.kindRawValue == ContextPageKind.plan.rawValue })
+        )
+
+        let restored = Workspace(createInitialTerminal: false)
+        restored.restoreSessionSnapshot(snapshot)
+
+        let contextPanels = restored.panels.values.compactMap { $0 as? ContextPanel }
+        XCTAssertEqual(contextPanels.count, 1)
+
+        let restoredContextPanel = try XCTUnwrap(contextPanels.first)
+        XCTAssertEqual(restoredContextPanel.pageState.kind, .agentMd)
+
+        let restoredSnapshot = restored.sessionSnapshot(includeScrollback: false)
+        XCTAssertEqual(restoredSnapshot.contextBindings.count, 2)
+        XCTAssertEqual(restored.focusedPanelId, restored.selectedAgentPanelId)
+        XCTAssertNotEqual(restored.focusedPanelId, restoredContextPanel.id)
+
+        let restoredPlanBinding = try XCTUnwrap(
+            restoredSnapshot.contextBindings.first(where: { $0.kindRawValue == ContextPageKind.plan.rawValue })
+        )
+        XCTAssertEqual(restoredPlanBinding.planFilePath, originalPlanBinding.planFilePath)
+    }
+
+    @MainActor
+    func testRestoreSessionSnapshotReResolvesAgentMdAgainstRestoredDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-session-agent-md-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(workingDirectory: root.path)
+        let agentPanelId = try XCTUnwrap(workspace.selectedAgentPanelId)
+        workspace.selectContextPage(forAgentPanelId: agentPanelId, kind: .agentMd)
+
+        let snapshot = workspace.sessionSnapshot(includeScrollback: false)
+        let restored = Workspace(createInitialTerminal: false)
+        restored.restoreSessionSnapshot(snapshot)
+
+        let restoredContextPanel = try XCTUnwrap(restored.panels.values.compactMap { $0 as? ContextPanel }.first)
+        XCTAssertEqual(restoredContextPanel.pageState.kind, .agentMd)
+        XCTAssertEqual(restoredContextPanel.pageState.resolvedFilePath, root.appendingPathComponent("AGENT.md").path)
+        XCTAssertEqual(
+            restoredContextPanel.pageState.missingReason,
+            String(localized: "contextPage.agentMd.missing", defaultValue: "No workspace-local AGENT.md file was found.")
+        )
     }
 
     func testSaveAndLoadRoundTripWithCustomSnapshotPath() throws {
@@ -1360,6 +1450,189 @@ final class AgentPickerAndT3ServerManagerTests: XCTestCase {
         XCTAssertEqual(environment["T3CODE_HOST"], "127.0.0.1")
         XCTAssertEqual(environment["NODE_PATH"], "/tmp/t3code-server/node_modules")
         XCTAssertNotEqual(environment["T3CODE_HOME"], projectDirectory)
+    }
+
+    func testT3CodeWebSupportUsesServerClientDirectoryAndTwoStageScripts() {
+        let bundleURL = URL(fileURLWithPath: "/tmp/cmux.app/Contents/Resources", isDirectory: true)
+        let clientURL = T3CodeWebSupport.bundledClientDirectory(bundleURL: bundleURL)
+        let themeURL = T3CodeWebSupport.bundledThemeURL(bundleURL: bundleURL)
+
+        XCTAssertEqual(T3CodeWebSupport.bundledClientRelativePath, "t3code-server/client")
+        XCTAssertEqual(T3CodeWebSupport.bundledThemeFilename, "cmux-ernest-theme.css")
+        XCTAssertEqual(clientURL.path, "/tmp/cmux.app/Contents/Resources/t3code-server/client")
+        XCTAssertEqual(
+            themeURL.path,
+            "/tmp/cmux.app/Contents/Resources/t3code-server/client/cmux-ernest-theme.css"
+        )
+
+        let tempDir = try! makeTemporaryDirectory(prefix: "cmux-t3-theme")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let resourcesDir = tempDir.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let clientDir = T3CodeWebSupport.bundledClientDirectory(bundleURL: resourcesDir)
+        try! FileManager.default.createDirectory(at: clientDir, withIntermediateDirectories: true)
+        try! "html[data-cmux-t3-theme='ernest']{color-scheme:light;}".write(
+            to: T3CodeWebSupport.bundledThemeURL(bundleURL: resourcesDir),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let scripts = T3CodeWebSupport.makeInitialUserScripts(bundleURL: resourcesDir)
+        XCTAssertEqual(scripts.count, 2)
+        XCTAssertEqual(scripts[0].injectionTime, .atDocumentStart)
+        XCTAssertEqual(scripts[1].injectionTime, .atDocumentEnd)
+    }
+
+    func testT3CodeWebSupportSkipsScriptsWhenThemeDisabled() {
+        let tempDir = try! makeTemporaryDirectory(prefix: "cmux-t3-theme-disabled")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let resourcesDir = tempDir.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let clientDir = T3CodeWebSupport.bundledClientDirectory(bundleURL: resourcesDir)
+        try! FileManager.default.createDirectory(at: clientDir, withIntermediateDirectories: true)
+        try! "html[data-cmux-t3-theme='ernest']{color-scheme:light;}".write(
+            to: T3CodeWebSupport.bundledThemeURL(bundleURL: resourcesDir),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let suiteName = "cmux-t3-theme-disabled-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(false, forKey: T3CodeWebSupport.hostThemeEnabledDefaultsKey)
+
+        let scripts = T3CodeWebSupport.makeInitialUserScripts(
+            bundleURL: resourcesDir,
+            userDefaults: defaults
+        )
+
+        XCTAssertTrue(scripts.isEmpty)
+        XCTAssertFalse(T3CodeWebSupport.isHostThemeEnabled(userDefaults: defaults))
+    }
+
+    func testT3CodeWebSupportReadinessDispositionDistinguishesReadyMissingShellAndDisabled() {
+        let readyPayload = T3CodeWebSupport.ThemeProbePayload(
+            theme: "ernest",
+            critical: true,
+            full: true,
+            installed: true,
+            autoDisabled: false,
+            disableReason: nil,
+            headerPresent: true,
+            composerPresent: false,
+            mainPresent: false,
+            interactiveElementCount: 3,
+            bodyTextLength: 42,
+            composerShellTagged: false,
+            composerEditorTagged: false,
+            headerBadgeTaggedCount: 0,
+            toolbarClusterTaggedCount: 0,
+            toolbarButtonTaggedCount: 0,
+            userShellTaggedCount: 0,
+            timestampTaggedCount: 0,
+            scrollButtonTaggedCount: 0,
+            consoleLogCount: 0,
+            errorLogCount: 0,
+            recentConsoleLog: [],
+            recentErrorLog: []
+        )
+        XCTAssertEqual(
+            T3CodeWebSupport.readinessDisposition(from: readyPayload, themeEnabled: true),
+            .themeInstalledAndReady
+        )
+
+        let genericBodyPayload = T3CodeWebSupport.ThemeProbePayload(
+            theme: "ernest",
+            critical: true,
+            full: true,
+            installed: true,
+            autoDisabled: false,
+            disableReason: nil,
+            headerPresent: false,
+            composerPresent: false,
+            mainPresent: false,
+            interactiveElementCount: 5,
+            bodyTextLength: 128,
+            composerShellTagged: false,
+            composerEditorTagged: false,
+            headerBadgeTaggedCount: 0,
+            toolbarClusterTaggedCount: 0,
+            toolbarButtonTaggedCount: 0,
+            userShellTaggedCount: 0,
+            timestampTaggedCount: 0,
+            scrollButtonTaggedCount: 0,
+            consoleLogCount: 0,
+            errorLogCount: 0,
+            recentConsoleLog: [],
+            recentErrorLog: []
+        )
+        XCTAssertEqual(
+            T3CodeWebSupport.readinessDisposition(from: genericBodyPayload, themeEnabled: true),
+            .themeInstalledButMissingShell
+        )
+
+        let missingShellPayload = T3CodeWebSupport.ThemeProbePayload(
+            theme: "ernest",
+            critical: true,
+            full: true,
+            installed: true,
+            autoDisabled: false,
+            disableReason: nil,
+            headerPresent: false,
+            composerPresent: false,
+            mainPresent: false,
+            interactiveElementCount: 0,
+            bodyTextLength: 0,
+            composerShellTagged: true,
+            composerEditorTagged: true,
+            headerBadgeTaggedCount: 1,
+            toolbarClusterTaggedCount: 1,
+            toolbarButtonTaggedCount: 4,
+            userShellTaggedCount: 1,
+            timestampTaggedCount: 1,
+            scrollButtonTaggedCount: 1,
+            consoleLogCount: 0,
+            errorLogCount: 0,
+            recentConsoleLog: [],
+            recentErrorLog: []
+        )
+        XCTAssertEqual(
+            T3CodeWebSupport.readinessDisposition(from: missingShellPayload, themeEnabled: true),
+            .themeInstalledButMissingShell
+        )
+
+        let jsErrorPayload = T3CodeWebSupport.ThemeProbePayload(
+            theme: "ernest",
+            critical: true,
+            full: true,
+            installed: true,
+            autoDisabled: false,
+            disableReason: nil,
+            headerPresent: false,
+            composerPresent: false,
+            mainPresent: false,
+            interactiveElementCount: 0,
+            bodyTextLength: 0,
+            composerShellTagged: false,
+            composerEditorTagged: false,
+            headerBadgeTaggedCount: 0,
+            toolbarClusterTaggedCount: 0,
+            toolbarButtonTaggedCount: 0,
+            userShellTaggedCount: 0,
+            timestampTaggedCount: 0,
+            scrollButtonTaggedCount: 0,
+            consoleLogCount: 1,
+            errorLogCount: 1,
+            recentConsoleLog: ["boom"],
+            recentErrorLog: ["ReferenceError: x is not defined"]
+        )
+        XCTAssertEqual(
+            T3CodeWebSupport.readinessDisposition(from: jsErrorPayload, themeEnabled: true),
+            .jsErrorDetectedBeforeReady
+        )
+
+        XCTAssertEqual(
+            T3CodeWebSupport.readinessDisposition(from: nil, themeEnabled: false),
+            .themeDisabled
+        )
     }
 
     private func makeTemporaryDirectory(prefix: String) throws -> URL {

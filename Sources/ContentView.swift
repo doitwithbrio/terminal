@@ -6949,7 +6949,7 @@ struct ContentView: View {
             tabManager: tabManager,
             allTabManagers: allTabManagers,
             workspaceDirectory: workspaceDir,
-            openT3Code: { [weak tabManager] threadId in
+            openT3Code: { [weak tabManager] threadId, threadTitle in
 #if DEBUG
                 dlog("t3open.closure threadId=\(threadId ?? "nil") tabManagerAlive=\(tabManager != nil ? 1 : 0)")
 #endif
@@ -6958,7 +6958,7 @@ struct ContentView: View {
 #if DEBUG
                 dlog("t3open.closure.call threadId=\(threadId ?? "nil") workspaceDir=\(workspaceDir) selectedTabId=\(tabManager.selectedTabId?.uuidString.prefix(8) ?? "nil") tabCount=\(tabManager.tabs.count)")
 #endif
-                AppDelegate.openT3CodePanel(tabManager: tabManager, threadId: threadId, workspaceDir: workspaceDir)
+                AppDelegate.openT3CodePanel(tabManager: tabManager, threadId: threadId, threadTitle: threadTitle, workspaceDir: workspaceDir)
             },
             openOMO: { [weak tabManager] sessionArgs in
                 guard let tabManager,

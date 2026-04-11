@@ -2238,6 +2238,9 @@ final class BrowserPanel: Panel, ObservableObject {
     private var activePortalHostLease: PortalHostLease?
     private var pendingDistinctPortalHostReplacementPaneId: UUID?
     private var lockedPortalHost: PortalHostLock?
+    // Preserve the original script contract for panels that depend on injected runtime helpers
+    // (notably the live T3 BrowserPanel path) so any WKWebView recreation keeps the same behavior.
+    private let preservedInitialUserScripts: [WKUserScript]
     private var webViewCancellables = Set<AnyCancellable>()
     private var navigationDelegate: BrowserNavigationDelegate?
     private var uiDelegate: BrowserUIDelegate?
@@ -2318,6 +2321,54 @@ final class BrowserPanel: Panel, ObservableObject {
 
     private static let portalHostAreaThreshold: CGFloat = 4
     private static let portalHostReplacementAreaGainRatio: CGFloat = 1.2
+
+    private static func clonedUserScripts(_ scripts: [WKUserScript]) -> [WKUserScript] {
+        scripts.map { script in
+            WKUserScript(
+                source: script.source,
+                injectionTime: script.injectionTime,
+                forMainFrameOnly: script.isForMainFrameOnly
+            )
+        }
+    }
+
+    private static func configureManagedWebView(
+        _ webView: CmuxWebView,
+        initialUserScripts: [WKUserScript],
+        chromeless: Bool
+    ) {
+        for script in clonedUserScripts(initialUserScripts) {
+            webView.configuration.userContentController.addUserScript(script)
+        }
+
+        guard chromeless else { return }
+
+        // T3 and other chromeless panels depend on the AppKit-layer clipping/shortcut policy,
+        // so replacements must reapply this every time a WKWebView instance is recreated.
+        webView.isChromeless = true
+        webView.wantsLayer = true
+        webView.layer?.cornerRadius = 18
+        webView.layer?.masksToBounds = true
+        webView.layer?.cornerCurve = .continuous
+    }
+
+    private static func makeManagedWebView(
+        profileID: UUID,
+        websiteDataStore: WKWebsiteDataStore,
+        initialUserScripts: [WKUserScript],
+        chromeless: Bool
+    ) -> CmuxWebView {
+        let webView = Self.makeWebView(
+            profileID: profileID,
+            websiteDataStore: websiteDataStore
+        )
+        configureManagedWebView(
+            webView,
+            initialUserScripts: initialUserScripts,
+            chromeless: chromeless
+        )
+        return webView
+    }
 
     private static func portalHostArea(for bounds: CGRect) -> CGFloat {
         max(0, bounds.width) * max(0, bounds.height)
@@ -2467,7 +2518,7 @@ final class BrowserPanel: Panel, ObservableObject {
     }
 
     var displayIcon: String? {
-        "globe"
+        isChromeless ? "sparkles" : "globe"
     }
 
     var isDirty: Bool {
@@ -2614,13 +2665,17 @@ final class BrowserPanel: Panel, ObservableObject {
         self.remoteProxyEndpoint = proxyEndpoint
         self.usesRemoteWorkspaceProxy = isRemoteWorkspace
         self.browserThemeMode = BrowserThemeSettings.mode()
+        let preservedInitialUserScripts = Self.clonedUserScripts(initialUserScripts)
+        self.preservedInitialUserScripts = preservedInitialUserScripts
         self.websiteDataStore = isRemoteWorkspace
             ? WKWebsiteDataStore(forIdentifier: remoteWebsiteDataStoreIdentifier ?? workspaceId)
             : BrowserProfileStore.shared.websiteDataStore(for: resolvedProfileID)
 
-        let webView = Self.makeWebView(
+        let webView = Self.makeManagedWebView(
             profileID: resolvedProfileID,
-            websiteDataStore: websiteDataStore
+            websiteDataStore: websiteDataStore,
+            initialUserScripts: preservedInitialUserScripts,
+            chromeless: chromeless
         )
         self.webView = webView
         self.insecureHTTPAlertFactory = { NSAlert() }
@@ -2718,24 +2773,8 @@ final class BrowserPanel: Panel, ObservableObject {
             self?.webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
         }
 
-        // Inject any user scripts before first navigation
-        for script in initialUserScripts {
-            webView.configuration.userContentController.addUserScript(script)
-        }
-
-        // Apply chromeless mode
         if chromeless {
             isChromeless = true
-            // Block browser-native shortcuts (Cmd+R reload) in chromeless panels
-            if let cmuxWebView = webView as? CmuxWebView {
-                cmuxWebView.isChromeless = true
-            }
-            // Apply rounded corners at the AppKit layer level so the portal-hosted
-            // WKWebView is properly clipped (SwiftUI .cornerRadius doesn't affect portals).
-            webView.wantsLayer = true
-            webView.layer?.cornerRadius = 18
-            webView.layer?.masksToBounds = true
-            webView.layer?.cornerCurve = .continuous
         }
 
         // Navigate to initial URL if provided
@@ -2882,9 +2921,11 @@ final class BrowserPanel: Panel, ObservableObject {
             websiteDataStore = BrowserProfileStore.shared.websiteDataStore(for: resolvedProfileID)
         }
 
-        let replacement = Self.makeWebView(
+        let replacement = Self.makeManagedWebView(
             profileID: resolvedProfileID,
-            websiteDataStore: websiteDataStore
+            websiteDataStore: websiteDataStore,
+            initialUserScripts: preservedInitialUserScripts,
+            chromeless: isChromeless
         )
         replacement.pageZoom = desiredZoom
         webViewInstanceID = UUID()
@@ -3191,6 +3232,9 @@ final class BrowserPanel: Panel, ObservableObject {
     ) {
         guard oldWebView === webView else { return }
 
+        // Some panels rely on injected runtime scripts rather than just URL/history state. Rebuild
+        // replacements with the same script/chromeless contract so a recovered WKWebView behaves
+        // like the original panel instead of silently becoming a plain browser view.
         let wasRenderable = shouldRenderWebView
         let restoreURL = Self.remoteProxyDisplayURL(for: oldWebView.url) ?? currentURL
         let restoreURLString = restoreURL?.absoluteString
@@ -3206,7 +3250,8 @@ final class BrowserPanel: Panel, ObservableObject {
             "reason=\(reason) " +
             "renderable=\(wasRenderable ? 1 : 0) restoreURL=\(restoreURLString ?? "nil") " +
             "restoreHistoryBack=\(history.backHistoryURLStrings.count) " +
-            "restoreHistoryForward=\(history.forwardHistoryURLStrings.count)"
+            "restoreHistoryForward=\(history.forwardHistoryURLStrings.count) " +
+            "reapplyScripts=\(preservedInitialUserScripts.count) chromeless=\(isChromeless ? 1 : 0)"
         )
 #endif
 
@@ -3223,9 +3268,11 @@ final class BrowserPanel: Panel, ObservableObject {
             oldCmuxWebView.onContextMenuDownloadStateChanged = nil
         }
 
-        let replacement = Self.makeWebView(
+        let replacement = Self.makeManagedWebView(
             profileID: profileID,
-            websiteDataStore: websiteDataStore
+            websiteDataStore: websiteDataStore,
+            initialUserScripts: preservedInitialUserScripts,
+            chromeless: isChromeless
         )
         replacement.pageZoom = desiredZoom
         webViewInstanceID = UUID()
@@ -4045,9 +4092,11 @@ extension BrowserPanel {
             oldCmuxWebView.onContextMenuDownloadStateChanged = nil
         }
 
-        let replacement = Self.makeWebView(
+        let replacement = Self.makeManagedWebView(
             profileID: profileID,
-            websiteDataStore: websiteDataStore
+            websiteDataStore: websiteDataStore,
+            initialUserScripts: preservedInitialUserScripts,
+            chromeless: isChromeless
         )
         webViewInstanceID = UUID()
         webView = replacement

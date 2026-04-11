@@ -8,14 +8,16 @@ final class ContextPagePickerDataSource {
         [
             ContextPagePickerItem(
                 id: ContextPageKind.agentMd.rawValue,
+                icon: ContextPageKind.agentMd.systemImage,
                 title: "AGENT.md",
-                subtitle: String(localized: "contextPagePicker.agentMd.subtitle", defaultValue: "Open the workspace-local AGENT.md file"),
+                subtitle: String(localized: "contextPagePicker.agentMd.subtitle", defaultValue: "Workspace instructions for humans and agents"),
                 action: { selectPage(.agentMd) }
             ),
             ContextPagePickerItem(
                 id: ContextPageKind.plan.rawValue,
+                icon: ContextPageKind.plan.systemImage,
                 title: String(localized: "contextPage.plan.title", defaultValue: "Plan"),
-                subtitle: String(localized: "contextPagePicker.plan.subtitle", defaultValue: "Open the bound plan markdown file"),
+                subtitle: String(localized: "contextPagePicker.plan.subtitle", defaultValue: "The bound task plan for this tab"),
                 action: { selectPage(.plan) }
             ),
         ]
